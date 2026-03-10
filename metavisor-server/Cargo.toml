@@ -23,6 +23,9 @@ anyhow.workspace = true
 chrono.workspace = true
 sha2.workspace = true
 clap = { version = "4", features = ["derive"] }
+rmcp = { version = "0.16", features = ["server", "transport-streamable-http-server"] }
+tokio-util = { version = "0.7", features = ["io"] }
+schemars = "1.0"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }

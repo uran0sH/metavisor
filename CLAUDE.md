@@ -81,6 +81,59 @@ cargo run --bin metavisor
 cargo test --test type_api_integration
 ```
 
+## MCP (Model Context Protocol) Server
+
+Metavisor includes an MCP server for AI assistant integration, built with the [rmcp](https://crates.io/crates/rmcp) SDK.
+
+### Transport Modes
+
+- **HTTP** (default): JSON-RPC over HTTP at `/mcp` endpoint
+- **Stdio**: For direct process communication (used by MCP clients)
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_entities` | Search for data entities by type name |
+| `get_entity` | Get entity details by GUID |
+| `list_types` | List all type definitions |
+| `get_type` | Get type definition details |
+| `create_entity` | Create a new entity |
+| `update_entity` | Update an existing entity |
+| `delete_entity` | Delete an entity by GUID |
+| `create_entity_type` | Create a new entity type definition |
+| `update_entity_type` | Update an existing entity type |
+| `delete_type` | Delete a type definition |
+
+### Available Resources
+
+| Resource URI | Description |
+|-------------|-------------|
+| `metavisor://entity/{guid}` | Access entity data as JSON |
+
+### Endpoint
+
+- **POST /mcp** - JSON-RPC over HTTP
+
+### Testing MCP (HTTP Mode)
+
+```bash
+# Initialize
+curl -X POST http://localhost:31000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+
+# List available tools
+curl -X POST http://localhost:31000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+
+# Call a tool
+curl -X POST http://localhost:31000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_types","arguments":{}}}'
+```
+
 ## Key Design Decisions
 
 1. **Workspace Structure**: Each crate manages its own dependencies
@@ -89,3 +142,4 @@ cargo test --test type_api_integration
 4. **Column-level Lineage**: Track data flow at column granularity using petgraph
 5. **Classification Propagation**: Tags like PII automatically propagate through lineage
 6. **MQ Abstraction**: trait-based design allows swapping Kafka/NATS/in-memory
+7. **MCP Integration**: MCP server built with rmcp SDK, supports HTTP and stdio transports for AI assistant integration

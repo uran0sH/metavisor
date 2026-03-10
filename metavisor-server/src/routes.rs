@@ -13,6 +13,7 @@ use crate::handlers::{
     get_all_types, get_entity_by_guid, get_type_by_guid, get_type_by_name, list_type_headers,
     update_entity, update_types, AppState, EntityAppState,
 };
+use crate::mcp::handle_mcp_request;
 
 /// Combined application state
 #[derive(Clone)]
@@ -24,13 +25,23 @@ pub struct AppCombinedState {
 /// Create the API router
 pub fn create_router(type_store: Arc<dyn TypeStore>, entity_store: Arc<dyn EntityStore>) -> Router {
     // Create type-specific states for handlers
-    let type_state = AppState { type_store };
-    let entity_state = EntityAppState { entity_store };
+    let type_state = AppState {
+        type_store: type_store.clone(),
+    };
+    let entity_state = EntityAppState {
+        entity_store: entity_store.clone(),
+    };
+    let mcp_state = AppCombinedState {
+        type_store,
+        entity_store,
+    };
 
     Router::new()
         // Health check
         .route("/health", get(health))
         .route("/api/metavisor/v1", get(api_info))
+        // MCP endpoint
+        .route("/mcp", post(handle_mcp_request).with_state(mcp_state))
         // Type management
         .route(
             "/api/metavisor/v1/types/typedefs",

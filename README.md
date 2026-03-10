@@ -166,6 +166,91 @@ curl -X POST http://localhost:31000/api/metavisor/v1/entity/bulk \
   ]'
 ```
 
+## MCP (Model Context Protocol) Integration
+
+Metavisor includes an MCP server for AI assistant integration (Claude, ChatGPT, etc.), built with the [rmcp](https://crates.io/crates/rmcp) SDK.
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_entities` | Search for data entities by type name |
+| `get_entity` | Get entity details by GUID |
+| `list_types` | List all type definitions |
+| `get_type` | Get type definition details |
+| `create_entity` | Create a new entity |
+| `update_entity` | Update an existing entity |
+| `delete_entity` | Delete an entity by GUID |
+| `create_entity_type` | Create a new entity type definition |
+| `update_entity_type` | Update an existing entity type |
+| `delete_type` | Delete a type definition |
+
+### Available Resources
+
+| Resource URI | Description |
+|-------------|-------------|
+| `metavisor://entity/{guid}` | Access entity data as JSON |
+
+### MCP Endpoint
+
+- **HTTP**: `POST http://localhost:31000/mcp` - JSON-RPC over HTTP
+- **Stdio**: Run `metavisor-mcp` binary for stdio transport (for MCP clients)
+
+### Testing MCP (HTTP)
+
+```bash
+# Initialize MCP session
+curl -X POST http://localhost:31000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+
+# List available tools
+curl -X POST http://localhost:31000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+
+# Call a tool - search for entities
+curl -X POST http://localhost:31000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":3,
+    "method":"tools/call",
+    "params":{
+      "name":"search_entities",
+      "arguments":{"type_name":"DataSet"}
+    }
+  }'
+
+# Call a tool - list all types
+curl -X POST http://localhost:31000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":4,
+    "method":"tools/call",
+    "params":{"name":"list_types","arguments":{}}
+  }'
+```
+
+### Using with AI Assistants
+
+**Claude Desktop / Cursor / VS Code MCP Client**:
+
+Configure your MCP client settings:
+
+```json
+{
+  "mcpServers": {
+    "metavisor": {
+      "url": "http://localhost:31000/mcp"
+    }
+  }
+}
+```
+
+For stdio mode (if supported), use the `metavisor-mcp` binary.
+
 ## Development
 
 ### Code Quality
@@ -191,6 +276,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed design documentati
 - [x] Type system API (Atlas-compatible)
 - [x] Entity CRUD operations
 - [x] Type validation logic
+- [x] MCP server for AI assistant integration
 - [ ] Data lineage tracking
 - [ ] Classification with propagation
 - [ ] Full-text search integration

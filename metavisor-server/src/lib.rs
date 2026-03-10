@@ -4,6 +4,7 @@
 
 pub mod error;
 mod handlers;
+pub mod mcp;
 pub mod routes;
 
 pub use error::{ApiError, Result};

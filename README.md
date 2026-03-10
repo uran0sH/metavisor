@@ -78,6 +78,7 @@ cargo run --bin metavisor
 
 # Terminal 2: Run integration tests
 cargo test --test type_api_integration
+cargo test --test entity_api_integration
 ```
 
 ## API Usage
@@ -112,6 +113,59 @@ curl -X POST http://localhost:31000/api/metavisor/v1/types/typedefs \
 curl http://localhost:31000/api/metavisor/v1/types/typedef/name/DataSet
 ```
 
+### Create Entity
+
+```bash
+curl -X POST http://localhost:31000/api/metavisor/v1/entity \
+  -H "Content-Type: application/json" \
+  -d '{
+    "typeName": "DataSet",
+    "attributes": {
+      "name": "users_table",
+      "description": "User information table"
+    },
+    "labels": ["production"]
+  }'
+```
+
+### Get Entity by GUID
+
+```bash
+curl http://localhost:31000/api/metavisor/v1/entity/guid/{guid}
+```
+
+### Update Entity
+
+```bash
+curl -X PUT http://localhost:31000/api/metavisor/v1/entity \
+  -H "Content-Type: application/json" \
+  -d '{
+    "guid": "{guid}",
+    "typeName": "DataSet",
+    "attributes": {
+      "name": "users_table",
+      "description": "Updated description"
+    }
+  }'
+```
+
+### Delete Entity
+
+```bash
+curl -X DELETE http://localhost:31000/api/metavisor/v1/entity/guid/{guid}
+```
+
+### Bulk Create Entities
+
+```bash
+curl -X POST http://localhost:31000/api/metavisor/v1/entity/bulk \
+  -H "Content-Type: application/json" \
+  -d '[
+    {"typeName": "DataSet", "attributes": {"name": "table1"}},
+    {"typeName": "DataSet", "attributes": {"name": "table2"}}
+  ]'
+```
+
 ## Development
 
 ### Code Quality
@@ -135,7 +189,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed design documentati
 
 - [x] Project structure setup
 - [x] Type system API (Atlas-compatible)
-- [ ] Entity CRUD operations
+- [x] Entity CRUD operations
+- [x] Type validation logic
 - [ ] Data lineage tracking
 - [ ] Classification with propagation
 - [ ] Full-text search integration

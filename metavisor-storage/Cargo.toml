@@ -12,6 +12,7 @@ surrealkv = { git = "https://github.com/surrealdb/surrealkv", branch = "main" }
 tantivy = "0.22"
 metavisor-core = { path = "../metavisor-core" }
 async-trait = "0.1"
+uuid = { version = "1.22", features = ["v4"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

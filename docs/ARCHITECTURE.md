@@ -455,8 +455,8 @@ GET    /api/metavisor/v1/search/dsl                  # DSL advanced search
 
 ### Phase 2: Type System
 - [x] TypeDef / AttributeDef definitions
-- [ ] Entity CRUD
-- [ ] Type validation logic
+- [x] Entity CRUD
+- [x] Type validation logic
 - [x] Type system REST API implementation
 
 ### Phase 3: Lineage Tracking

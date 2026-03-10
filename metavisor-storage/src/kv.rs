@@ -2,12 +2,14 @@
 
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::error::{Result, StorageError};
 
 /// KV Store wrapper
+#[derive(Clone)]
 pub struct KvStore {
-    inner: surrealkv::Tree,
+    inner: Arc<surrealkv::Tree>,
 }
 
 impl KvStore {
@@ -17,7 +19,9 @@ impl KvStore {
             .with_path(path.into())
             .build()
             .map_err(|e| StorageError::Kv(e.to_string()))?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
     }
 
     /// Get a value by key

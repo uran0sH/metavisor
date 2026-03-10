@@ -41,7 +41,8 @@ async fn main() -> anyhow::Result<()> {
 
     let kv_store = KvStore::open(&args.data_dir)?;
     let type_store: Arc<dyn TypeStore> = Arc::new(KvTypeStore::new(kv_store.clone()));
-    let entity_store: Arc<dyn EntityStore> = Arc::new(KvEntityStore::new(kv_store, type_store.clone()));
+    let entity_store: Arc<dyn EntityStore> =
+        Arc::new(KvEntityStore::new(kv_store, type_store.clone()));
 
     // Create router
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));

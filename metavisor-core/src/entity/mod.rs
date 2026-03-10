@@ -11,12 +11,12 @@
 
 mod classification;
 mod common;
-mod entity;
 mod header;
+mod instance;
 mod reference;
 
 pub use classification::{Classification, TimeBoundary};
 pub use common::*;
-pub use entity::{EntitiesWithExtInfo, Entity, EntityExtInfo, EntityWithExtInfo};
 pub use header::EntityHeader;
+pub use instance::{EntitiesWithExtInfo, Entity, EntityExtInfo, EntityWithExtInfo};
 pub use reference::ObjectId;

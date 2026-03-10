@@ -45,13 +45,11 @@ impl KvEntityStore {
 
         // 3. Validate required attributes
         for attr_def in attr_defs {
-            if !attr_def.is_optional {
-                if !entity.attributes.contains_key(&attr_def.name) {
-                    return Err(CoreError::Validation(format!(
-                        "Required attribute '{}' is missing for type '{}'",
-                        attr_def.name, entity.type_name
-                    )));
-                }
+            if !attr_def.is_optional && !entity.attributes.contains_key(&attr_def.name) {
+                return Err(CoreError::Validation(format!(
+                    "Required attribute '{}' is missing for type '{}'",
+                    attr_def.name, entity.type_name
+                )));
             }
         }
 
@@ -112,7 +110,7 @@ impl EntityStore for KvEntityStore {
         self.validate_entity(entity).await?;
 
         // Generate GUID if not provided
-        let guid = entity.guid.clone().unwrap_or_else(|| Self::generate_guid());
+        let guid = entity.guid.clone().unwrap_or_else(Self::generate_guid);
 
         let key = entity_key(&guid);
 
@@ -302,7 +300,9 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, CoreError::Validation(_)));
-        assert!(err.to_string().contains("Required attribute 'name' is missing"));
+        assert!(err
+            .to_string()
+            .contains("Required attribute 'name' is missing"));
     }
 
     #[tokio::test]
@@ -400,8 +400,7 @@ mod tests {
         let (store, type_store) = create_test_stores().await;
         create_test_type(&type_store).await;
 
-        let entity =
-            Entity::new("TestTable").with_attribute("name", json!("temp"));
+        let entity = Entity::new("TestTable").with_attribute("name", json!("temp"));
 
         let guid = store.create_entity(&entity).await.unwrap();
         assert!(store.entity_exists(&guid).await.unwrap());

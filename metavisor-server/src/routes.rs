@@ -24,9 +24,7 @@ pub struct AppCombinedState {
 /// Create the API router
 pub fn create_router(type_store: Arc<dyn TypeStore>, entity_store: Arc<dyn EntityStore>) -> Router {
     // Create type-specific states for handlers
-    let type_state = AppState {
-        type_store: type_store,
-    };
+    let type_state = AppState { type_store };
     let entity_state = EntityAppState { entity_store };
 
     Router::new()

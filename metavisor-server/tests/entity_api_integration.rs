@@ -97,6 +97,29 @@ async fn test_create_entity() {
 async fn test_create_and_get_entity() {
     let client = client();
 
+    // First ensure the type exists
+    let type_def = json!({
+        "entityDefs": [{
+            "name": "TestTable",
+            "superTypes": ["DataSet"],
+            "attributeDefs": [
+                {"name": "name", "typeName": "string", "isOptional": false},
+                {"name": "rowCount", "typeName": "int", "isOptional": true}
+            ]
+        }]
+    });
+
+    // Try to create type (ignore if already exists)
+    let _ = client
+        .post(format!(
+            "{}/api/metavisor/v1/types/typedefs",
+            TEST_SERVER_URL
+        ))
+        .header("Content-Type", "application/json")
+        .json(&type_def)
+        .send()
+        .await;
+
     // Create entity
     let entity = json!({
         "typeName": "TestTable",
@@ -139,6 +162,29 @@ async fn test_create_and_get_entity() {
 #[tokio::test]
 async fn test_update_entity() {
     let client = client();
+
+    // First ensure the type exists
+    let type_def = json!({
+        "entityDefs": [{
+            "name": "TestTable",
+            "superTypes": ["DataSet"],
+            "attributeDefs": [
+                {"name": "name", "typeName": "string", "isOptional": false},
+                {"name": "rowCount", "typeName": "int", "isOptional": true}
+            ]
+        }]
+    });
+
+    // Try to create type (ignore if already exists)
+    let _ = client
+        .post(format!(
+            "{}/api/metavisor/v1/types/typedefs",
+            TEST_SERVER_URL
+        ))
+        .header("Content-Type", "application/json")
+        .json(&type_def)
+        .send()
+        .await;
 
     // Create entity
     let entity = json!({
@@ -203,6 +249,29 @@ async fn test_update_entity() {
 #[tokio::test]
 async fn test_delete_entity() {
     let client = client();
+
+    // First ensure the type exists
+    let type_def = json!({
+        "entityDefs": [{
+            "name": "TestTable",
+            "superTypes": ["DataSet"],
+            "attributeDefs": [
+                {"name": "name", "typeName": "string", "isOptional": false},
+                {"name": "rowCount", "typeName": "int", "isOptional": true}
+            ]
+        }]
+    });
+
+    // Try to create type (ignore if already exists)
+    let _ = client
+        .post(format!(
+            "{}/api/metavisor/v1/types/typedefs",
+            TEST_SERVER_URL
+        ))
+        .header("Content-Type", "application/json")
+        .json(&type_def)
+        .send()
+        .await;
 
     // Create entity
     let entity = json!({
@@ -274,6 +343,29 @@ async fn test_get_nonexistent_entity() {
 async fn test_create_entity_with_classification() {
     let client = client();
 
+    // First ensure the entity type exists
+    let type_def = json!({
+        "entityDefs": [{
+            "name": "TestTable",
+            "superTypes": ["DataSet"],
+            "attributeDefs": [
+                {"name": "name", "typeName": "string", "isOptional": false},
+                {"name": "rowCount", "typeName": "int", "isOptional": true}
+            ]
+        }]
+    });
+
+    // Try to create type (ignore if already exists)
+    let _ = client
+        .post(format!(
+            "{}/api/metavisor/v1/types/typedefs",
+            TEST_SERVER_URL
+        ))
+        .header("Content-Type", "application/json")
+        .json(&type_def)
+        .send()
+        .await;
+
     // Create classification type
     let class_type = json!({
         "classificationDefs": [{
@@ -336,6 +428,29 @@ async fn test_create_entity_with_classification() {
 #[tokio::test]
 async fn test_create_entities_bulk() {
     let client = client();
+
+    // First ensure the type exists
+    let type_def = json!({
+        "entityDefs": [{
+            "name": "TestTable",
+            "superTypes": ["DataSet"],
+            "attributeDefs": [
+                {"name": "name", "typeName": "string", "isOptional": false},
+                {"name": "rowCount", "typeName": "int", "isOptional": true}
+            ]
+        }]
+    });
+
+    // Try to create type (ignore if already exists)
+    let _ = client
+        .post(format!(
+            "{}/api/metavisor/v1/types/typedefs",
+            TEST_SERVER_URL
+        ))
+        .header("Content-Type", "application/json")
+        .json(&type_def)
+        .send()
+        .await;
 
     let entities = json!([
         {

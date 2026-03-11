@@ -14,7 +14,8 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 
 use metavisor_core::{
-    AttributeDef, Entity, EntityDef, EntityHeader, EntityStore, TypeDef, TypeStore,
+    AttributeDef, Entity, EntityDef, EntityHeader, EntityStore, ObjectId, Relationship,
+    RelationshipHeader, RelationshipStore, TypeDef, TypeStore,
 };
 
 use crate::routes::AppCombinedState;
@@ -27,6 +28,7 @@ use crate::routes::AppCombinedState;
 pub struct MetavisorMcpServer {
     type_store: Arc<dyn TypeStore>,
     entity_store: Arc<dyn EntityStore>,
+    relationship_store: Arc<dyn RelationshipStore>,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
@@ -36,6 +38,7 @@ impl MetavisorMcpServer {
         Self {
             type_store: state.type_store,
             entity_store: state.entity_store,
+            relationship_store: state.relationship_store,
             tool_router: Self::tool_router(),
         }
     }
@@ -380,6 +383,208 @@ impl MetavisorMcpServer {
             args.name
         ))]))
     }
+
+    // ========================================================================
+    // Relationship Tools
+    // ========================================================================
+
+    /// Create a new relationship between two entities.
+    #[tool(
+        name = "create_relationship",
+        description = "Create a new relationship between two entities. Relationships define how entities are connected (e.g., table contains columns, process inputs data)."
+    )]
+    async fn create_relationship(
+        &self,
+        Parameters(args): Parameters<CreateRelationshipArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let end1 = ObjectId::by_guid(&args.end1_type, &args.end1_guid);
+        let end2 = ObjectId::by_guid(&args.end2_type, &args.end2_guid);
+
+        let mut relationship = Relationship::between(&args.type_name, end1, end2);
+
+        if let Some(label) = args.label {
+            relationship = relationship.with_label(label);
+        }
+
+        if let Some(serde_json::Value::Object(map)) = args.attributes {
+            for (key, value) in map {
+                relationship = relationship.with_attribute(key, value);
+            }
+        }
+
+        let guid = self
+            .relationship_store
+            .create_relationship(&relationship)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Relationship created successfully with GUID: {}",
+            guid
+        ))]))
+    }
+
+    /// Get detailed information about a specific relationship by its GUID.
+    #[tool(
+        name = "get_relationship",
+        description = "Get detailed information about a specific relationship by its GUID. Returns full relationship details including endpoints and attributes."
+    )]
+    async fn get_relationship(
+        &self,
+        Parameters(args): Parameters<GetRelationshipArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let relationship = self
+            .relationship_store
+            .get_relationship(&args.guid)
+            .await
+            .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            format_relationship(&relationship),
+        )]))
+    }
+
+    /// Update an existing relationship by its GUID.
+    #[tool(
+        name = "update_relationship",
+        description = "Update an existing relationship by its GUID. Can modify attributes and label."
+    )]
+    async fn update_relationship(
+        &self,
+        Parameters(args): Parameters<UpdateRelationshipArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        // Get existing relationship to preserve endpoints and status
+        let existing = self
+            .relationship_store
+            .get_relationship(&args.guid)
+            .await
+            .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
+
+        let mut relationship = Relationship::new(&existing.type_name)
+            .with_guid(&args.guid)
+            .with_status(existing.status);
+
+        // Preserve endpoints
+        if let Some(end1) = existing.end1 {
+            relationship = relationship.with_end1(end1);
+        }
+        if let Some(end2) = existing.end2 {
+            relationship = relationship.with_end2(end2);
+        }
+
+        // Update label if provided, otherwise preserve existing
+        if let Some(label) = args.label {
+            relationship = relationship.with_label(label);
+        } else if let Some(label) = existing.label {
+            relationship = relationship.with_label(label);
+        }
+
+        // Update attributes if provided
+        if let Some(attributes) = args.attributes {
+            if let serde_json::Value::Object(map) = attributes {
+                for (key, value) in map {
+                    relationship = relationship.with_attribute(key, value);
+                }
+            }
+        } else {
+            // Preserve existing attributes
+            for (key, value) in existing.attributes {
+                relationship = relationship.with_attribute(key, value);
+            }
+        }
+
+        self.relationship_store
+            .update_relationship(&relationship)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Relationship '{}' updated successfully",
+            args.guid
+        ))]))
+    }
+
+    /// Delete a relationship by its GUID.
+    #[tool(
+        name = "delete_relationship",
+        description = "Delete a relationship by its GUID."
+    )]
+    async fn delete_relationship(
+        &self,
+        Parameters(args): Parameters<DeleteRelationshipArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.relationship_store
+            .delete_relationship(&args.guid)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Relationship '{}' deleted successfully",
+            args.guid
+        ))]))
+    }
+
+    /// List all relationships for a specific entity.
+    #[tool(
+        name = "list_relationships_by_entity",
+        description = "List all relationships where the specified entity is an endpoint. Useful for finding all connections to a data asset."
+    )]
+    async fn list_relationships_by_entity(
+        &self,
+        Parameters(args): Parameters<ListRelationshipsByEntityArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let headers = self
+            .relationship_store
+            .list_relationships_by_entity(&args.entity_guid)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        if headers.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "No relationships found for entity '{}'",
+                args.entity_guid
+            ))]));
+        }
+
+        let result = headers
+            .iter()
+            .map(format_relationship_header)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    /// List all relationships of a specific type.
+    #[tool(
+        name = "list_relationships_by_type",
+        description = "List all relationships of a specific type name. Useful for finding all instances of a particular relationship type."
+    )]
+    async fn list_relationships_by_type(
+        &self,
+        Parameters(args): Parameters<ListRelationshipsByTypeArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let headers = self
+            .relationship_store
+            .list_relationships_by_type(&args.type_name)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        if headers.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "No relationships found for type '{}'",
+                args.type_name
+            ))]));
+        }
+
+        let result = headers
+            .iter()
+            .map(format_relationship_header)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
 }
 
 // ============================================================================
@@ -564,6 +769,66 @@ pub struct AttributeDefArgs {
 }
 
 // ============================================================================
+// Relationship Tool Argument Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CreateRelationshipArgs {
+    #[schemars(
+        description = "The relationship type name (e.g., 'table_columns', 'process_inputs')"
+    )]
+    pub type_name: String,
+    #[schemars(description = "Type name of the first endpoint entity")]
+    pub end1_type: String,
+    #[schemars(description = "GUID of the first endpoint entity")]
+    pub end1_guid: String,
+    #[schemars(description = "Type name of the second endpoint entity")]
+    pub end2_type: String,
+    #[schemars(description = "GUID of the second endpoint entity")]
+    pub end2_guid: String,
+    #[schemars(description = "Optional label for the relationship")]
+    pub label: Option<String>,
+    #[schemars(description = "Optional relationship attributes as a JSON object")]
+    pub attributes: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GetRelationshipArgs {
+    #[schemars(description = "The GUID of the relationship to retrieve")]
+    pub guid: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateRelationshipArgs {
+    #[schemars(description = "The GUID of the relationship to update")]
+    pub guid: String,
+    #[schemars(description = "Optional new label for the relationship")]
+    pub label: Option<String>,
+    #[schemars(
+        description = "Updated relationship attributes as a JSON object (replaces existing)"
+    )]
+    pub attributes: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteRelationshipArgs {
+    #[schemars(description = "The GUID of the relationship to delete")]
+    pub guid: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ListRelationshipsByEntityArgs {
+    #[schemars(description = "The GUID of the entity to find relationships for")]
+    pub entity_guid: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ListRelationshipsByTypeArgs {
+    #[schemars(description = "The relationship type name to filter by")]
+    pub type_name: String,
+}
+
+// ============================================================================
 // Formatting Helpers
 // ============================================================================
 
@@ -683,6 +948,75 @@ fn format_type_def(t: &TypeDef) -> String {
             format!("# Business Metadata: {}\n", def.name)
         }
     }
+}
+
+fn format_relationship_header(h: &RelationshipHeader) -> String {
+    let guid = h.guid.as_deref().unwrap_or("unknown");
+    let mut result = format!("**{}** (GUID: {})", h.type_name, guid);
+
+    if let Some(ref label) = h.label {
+        result.push_str(&format!("\n  Label: {}", label));
+    }
+
+    result.push_str(&format!("\n  Status: {:?}", h.status));
+
+    if let Some(ref end1) = h.end1 {
+        let end1_guid = end1.guid.as_deref().unwrap_or("unknown");
+        result.push_str(&format!("\n  End1: {} ({})", end1.type_name, end1_guid));
+    }
+
+    if let Some(ref end2) = h.end2 {
+        let end2_guid = end2.guid.as_deref().unwrap_or("unknown");
+        result.push_str(&format!("\n  End2: {} ({})", end2.type_name, end2_guid));
+    }
+
+    if let Some(ref attrs) = h.attributes {
+        if !attrs.is_empty() {
+            result.push_str("\n  Attributes:");
+            for (key, value) in attrs {
+                result.push_str(&format!("\n    - {}: {}", key, value));
+            }
+        }
+    }
+
+    result
+}
+
+fn format_relationship(r: &Relationship) -> String {
+    let guid = r.guid.as_deref().unwrap_or("unknown");
+    let mut result = format!(
+        "# Relationship: {}\n**GUID:** {}\n**Status:** {:?}\n",
+        r.type_name, guid, r.status
+    );
+
+    if let Some(ref label) = r.label {
+        result.push_str(&format!("\n## Label\n{}\n", label));
+    }
+
+    if let Some(ref end1) = r.end1 {
+        let end1_guid = end1.guid.as_deref().unwrap_or("unknown");
+        result.push_str(&format!(
+            "\n## End1\n**Type:** {}\n**GUID:** {}\n",
+            end1.type_name, end1_guid
+        ));
+    }
+
+    if let Some(ref end2) = r.end2 {
+        let end2_guid = end2.guid.as_deref().unwrap_or("unknown");
+        result.push_str(&format!(
+            "\n## End2\n**Type:** {}\n**GUID:** {}\n",
+            end2.type_name, end2_guid
+        ));
+    }
+
+    if !r.attributes.is_empty() {
+        result.push_str("\n## Attributes\n");
+        for (key, value) in &r.attributes {
+            result.push_str(&format!("- **{}:** {}\n", key, value));
+        }
+    }
+
+    result
 }
 
 // ============================================================================

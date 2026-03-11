@@ -3,8 +3,15 @@
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use surrealkv::LSMIterator;
 
 use crate::error::{Result, StorageError};
+
+/// A write operation for batch transactions
+pub enum WriteOp {
+    Set { key: Vec<u8>, value: Vec<u8> },
+    Delete { key: Vec<u8> },
+}
 
 /// KV Store wrapper
 #[derive(Clone)]
@@ -88,6 +95,86 @@ impl KvStore {
             .get(key.to_vec())
             .map_err(|e| StorageError::Kv(e.to_string()))?;
         Ok(result.is_some())
+    }
+
+    /// Execute multiple write operations in a single transaction
+    /// This ensures atomicity - either all operations succeed or none do
+    pub async fn batch_write(&self, ops: Vec<WriteOp>) -> Result<()> {
+        let mut txn = self
+            .inner
+            .begin()
+            .map_err(|e| StorageError::Kv(e.to_string()))?;
+
+        for op in ops {
+            match op {
+                WriteOp::Set { key, value } => {
+                    txn.set(key, value)
+                        .map_err(|e| StorageError::Kv(e.to_string()))?;
+                }
+                WriteOp::Delete { key } => {
+                    txn.delete(key)
+                        .map_err(|e| StorageError::Kv(e.to_string()))?;
+                }
+            }
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| StorageError::Kv(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Scan all keys with a given prefix
+    /// Returns a vector of (key, value) pairs where key starts with prefix
+    pub fn scan_prefix<V>(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, V)>>
+    where
+        V: DeserializeOwned,
+    {
+        let txn = self
+            .inner
+            .begin()
+            .map_err(|e| StorageError::Kv(e.to_string()))?;
+
+        // Create end bound by incrementing the last byte of the prefix
+        // This gives us the range [prefix, prefix+1) which covers all keys starting with prefix
+        let start = prefix.to_vec();
+        let end = Self::increment_prefix(prefix);
+
+        let mut iter = txn
+            .range(start, end)
+            .map_err(|e| StorageError::Kv(e.to_string()))?;
+
+        // Seek to the first key with the prefix
+        iter.seek_first()
+            .map_err(|e| StorageError::Kv(e.to_string()))?;
+
+        let mut results = Vec::new();
+        while iter.valid() {
+            let key_ref = iter.key();
+            let user_key = key_ref.user_key().to_vec();
+
+            // Get the value
+            let value_bytes = iter.value().map_err(|e| StorageError::Kv(e.to_string()))?;
+            let value: V = serde_json::from_slice(&value_bytes)?;
+            results.push((user_key, value));
+
+            // Move to next entry
+            iter.next().map_err(|e| StorageError::Kv(e.to_string()))?;
+        }
+
+        Ok(results)
+    }
+
+    /// Increment the last byte of a prefix to create an exclusive upper bound
+    fn increment_prefix(prefix: &[u8]) -> Vec<u8> {
+        let mut end = prefix.to_vec();
+        if let Some(last) = end.last_mut() {
+            *last = last.saturating_add(1);
+        } else {
+            // Empty prefix - use a single byte as upper bound
+            end.push(0xFF);
+        }
+        end
     }
 }
 

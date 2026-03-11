@@ -17,14 +17,17 @@ use super::struct_def::StructDef;
 // ============================================================================
 
 /// Unified type definition that can hold any type category
+///
+/// Uses internally tagged serialization based on the `category` field
+/// to distinguish between different type definitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "category", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TypeDef {
     Entity(EntityDef),
-    Struct(StructDef),
-    Enum(EnumDef),
     Classification(ClassificationDef),
     Relationship(RelationshipDef),
+    Struct(StructDef),
+    Enum(EnumDef),
     BusinessMetadata(BusinessMetadataDef),
 }
 

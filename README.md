@@ -166,6 +166,49 @@ curl -X POST http://localhost:31000/api/metavisor/v1/entity/bulk \
   ]'
 ```
 
+### Create Relationship Type
+
+First, create a relationship type definition:
+
+```bash
+curl -X POST http://localhost:31000/api/metavisor/v1/types/typedefs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "relationshipDefs": [{
+      "name": "table_columns",
+      "relationshipCategory": "COMPOSITION",
+      "propagateTags": "ONE_TO_TWO",
+      "endDef1": {"type": "DataSet", "name": "columns"},
+      "endDef2": {"type": "Column", "name": "table"}
+    }]
+  }'
+```
+
+### Create Relationship
+
+```bash
+curl -X POST http://localhost:31000/api/metavisor/v1/relationship \
+  -H "Content-Type: application/json" \
+  -d '{
+    "typeName": "table_columns",
+    "end1": {"typeName": "DataSet", "guid": "table-guid-1"},
+    "end2": {"typeName": "Column", "guid": "column-guid-1"},
+    "label": "contains"
+  }'
+```
+
+### Get Relationship by GUID
+
+```bash
+curl http://localhost:31000/api/metavisor/v1/relationship/guid/{guid}
+```
+
+### Delete Relationship
+
+```bash
+curl -X DELETE http://localhost:31000/api/metavisor/v1/relationship/guid/{guid}
+```
+
 ## MCP (Model Context Protocol) Integration
 
 Metavisor includes an MCP server for AI assistant integration (Claude, ChatGPT, etc.), built with the [rmcp](https://crates.io/crates/rmcp) SDK.
@@ -277,7 +320,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed design documentati
 - [x] Entity CRUD operations
 - [x] Type validation logic
 - [x] MCP server for AI assistant integration
-- [ ] Data lineage tracking
+- [x] Relationship CRUD operations
+- [ ] Data lineage tracking (petgraph integration)
 - [ ] Classification with propagation
 - [ ] Full-text search integration
 - [ ] Message queue abstraction (Kafka/NATS)

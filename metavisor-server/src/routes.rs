@@ -6,24 +6,31 @@ use axum::{
 };
 use std::sync::Arc;
 
-use metavisor_core::{EntityStore, TypeStore};
+use metavisor_core::{EntityStore, RelationshipStore, TypeStore};
 
 use crate::handlers::{
-    create_entities, create_entity, create_types, delete_entity_by_guid, delete_types,
-    get_all_types, get_entity_by_guid, get_type_by_guid, get_type_by_name, list_type_headers,
-    update_entity, update_types, AppState, EntityAppState,
+    create_entities, create_entity, create_relationship, create_types, delete_entity_by_guid,
+    delete_relationship_by_guid, delete_types, get_all_types, get_entity_by_guid,
+    get_relationship_by_guid, get_type_by_guid, get_type_by_name, list_relationships_by_entity,
+    list_relationships_by_type, list_type_headers, update_entity, update_relationship,
+    update_types, AppState, EntityAppState, RelationshipAppState,
 };
 use crate::mcp::handle_mcp_request;
 
-/// Combined application state
+/// Combined application state for MCP
 #[derive(Clone)]
 pub struct AppCombinedState {
     pub type_store: Arc<dyn TypeStore>,
     pub entity_store: Arc<dyn EntityStore>,
+    pub relationship_store: Arc<dyn RelationshipStore>,
 }
 
 /// Create the API router
-pub fn create_router(type_store: Arc<dyn TypeStore>, entity_store: Arc<dyn EntityStore>) -> Router {
+pub fn create_router(
+    type_store: Arc<dyn TypeStore>,
+    entity_store: Arc<dyn EntityStore>,
+    relationship_store: Arc<dyn RelationshipStore>,
+) -> Router {
     // Create type-specific states for handlers
     let type_state = AppState {
         type_store: type_store.clone(),
@@ -31,9 +38,13 @@ pub fn create_router(type_store: Arc<dyn TypeStore>, entity_store: Arc<dyn Entit
     let entity_state = EntityAppState {
         entity_store: entity_store.clone(),
     };
+    let relationship_state = RelationshipAppState {
+        relationship_store: relationship_store.clone(),
+    };
     let mcp_state = AppCombinedState {
         type_store,
         entity_store,
+        relationship_store,
     };
 
     Router::new()
@@ -91,6 +102,31 @@ pub fn create_router(type_store: Arc<dyn TypeStore>, entity_store: Arc<dyn Entit
         .route(
             "/api/metavisor/v1/entity/guid/{guid}",
             delete(delete_entity_by_guid).with_state(entity_state),
+        )
+        // Relationship management
+        .route(
+            "/api/metavisor/v1/relationship",
+            post(create_relationship).with_state(relationship_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/relationship",
+            put(update_relationship).with_state(relationship_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/relationship/guid/{guid}",
+            get(get_relationship_by_guid).with_state(relationship_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/relationship/guid/{guid}",
+            delete(delete_relationship_by_guid).with_state(relationship_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/relationship/entity/{entity_guid}",
+            get(list_relationships_by_entity).with_state(relationship_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/relationship/type/{type_name}",
+            get(list_relationships_by_type).with_state(relationship_state),
         )
 }
 

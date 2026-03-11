@@ -33,11 +33,13 @@ impl IntoResponse for ApiError {
             ApiError::Core(e) => match e {
                 metavisor_core::CoreError::TypeNotFound(_)
                 | metavisor_core::CoreError::EntityNotFound(_)
+                | metavisor_core::CoreError::RelationshipNotFound(_)
                 | metavisor_core::CoreError::ClassificationNotFound(_) => {
                     (StatusCode::NOT_FOUND, e.to_string())
                 }
                 metavisor_core::CoreError::TypeAlreadyExists(_)
-                | metavisor_core::CoreError::EntityAlreadyExists(_) => {
+                | metavisor_core::CoreError::EntityAlreadyExists(_)
+                | metavisor_core::CoreError::RelationshipAlreadyExists(_) => {
                     (StatusCode::CONFLICT, e.to_string())
                 }
                 metavisor_core::CoreError::Validation(_)

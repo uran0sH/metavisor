@@ -20,6 +20,12 @@ pub enum CoreError {
     #[error("Entity already exists: {0}")]
     EntityAlreadyExists(String),
 
+    #[error("Relationship not found: {0}")]
+    RelationshipNotFound(String),
+
+    #[error("Relationship already exists: {0}")]
+    RelationshipAlreadyExists(String),
+
     #[error("Classification not found: {0}")]
     ClassificationNotFound(String),
 

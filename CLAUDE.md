@@ -104,6 +104,12 @@ Metavisor includes an MCP server for AI assistant integration, built with the [r
 | `create_entity_type` | Create a new entity type definition |
 | `update_entity_type` | Update an existing entity type |
 | `delete_type` | Delete a type definition |
+| `create_relationship` | Create a relationship between two entities |
+| `get_relationship` | Get relationship details by GUID |
+| `update_relationship` | Update an existing relationship |
+| `delete_relationship` | Delete a relationship by GUID |
+| `list_relationships_by_entity` | List all relationships for an entity |
+| `list_relationships_by_type` | List all relationships of a specific type |
 
 ### Available Resources
 
@@ -143,3 +149,29 @@ curl -X POST http://localhost:31000/mcp \
 5. **Classification Propagation**: Tags like PII automatically propagate through lineage
 6. **MQ Abstraction**: trait-based design allows swapping Kafka/NATS/in-memory
 7. **MCP Integration**: MCP server built with rmcp SDK, supports HTTP and stdio transports for AI assistant integration
+
+## Relationship API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/metavisor/v1/relationship` | POST | Create a relationship |
+| `/api/metavisor/v1/relationship` | PUT | Update a relationship |
+| `/api/metavisor/v1/relationship/guid/{guid}` | GET | Get relationship by GUID |
+| `/api/metavisor/v1/relationship/guid/{guid}` | DELETE | Delete relationship |
+| `/api/metavisor/v1/relationship/entity/{entity_guid}` | GET | List relationships by entity |
+| `/api/metavisor/v1/relationship/type/{type_name}` | GET | List relationships by type |
+
+### Relationship Storage Keys
+
+| Key Format | Description |
+|------------|-------------|
+| `relationship:{guid}` | Main relationship data |
+| `rel_endpoint:{entity_guid}:{rel_guid}` | Endpoint index |
+| `rel_type:{type_name}:{rel_guid}` | Type index |
+
+### Transaction Support
+
+Relationship operations use atomic transactions to ensure consistency:
+- Create: writes main data + endpoint indices + type index atomically
+- Delete: removes all indices atomically
+- Uses `KvStore::batch_write()` for atomicity

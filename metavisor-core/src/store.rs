@@ -1,8 +1,12 @@
-//! TypeStore and EntityStore traits for CRUD operations
+//! TypeStore, EntityStore, and RelationshipStore traits for CRUD operations
 
 use async_trait::async_trait;
 
-use crate::{Entity, EntityHeader, Result, TypeDef};
+use crate::{Entity, EntityHeader, Relationship, RelationshipHeader, Result, TypeDef};
+
+// ============================================================================
+// TypeStore Trait
+// ============================================================================
 
 /// TypeStore trait for managing type definitions
 #[async_trait]
@@ -28,6 +32,10 @@ pub trait TypeStore: Send + Sync {
     /// List types by category
     async fn list_types_by_category(&self, category: crate::TypeCategory) -> Result<Vec<String>>;
 }
+
+// ============================================================================
+// EntityStore Trait
+// ============================================================================
 
 /// EntityStore trait for managing entity instances
 #[async_trait]
@@ -61,6 +69,45 @@ pub trait EntityStore: Send + Sync {
     async fn list_entities(&self) -> Result<Vec<EntityHeader>>;
 }
 
+// ============================================================================
+// RelationshipStore Trait
+// ============================================================================
+
+/// RelationshipStore trait for managing relationship instances
+#[async_trait]
+pub trait RelationshipStore: Send + Sync {
+    /// Create a new relationship
+    async fn create_relationship(&self, relationship: &Relationship) -> Result<String>;
+
+    /// Get a relationship by GUID
+    async fn get_relationship(&self, guid: &str) -> Result<Relationship>;
+
+    /// Update a relationship
+    async fn update_relationship(&self, relationship: &Relationship) -> Result<()>;
+
+    /// Delete a relationship by GUID
+    async fn delete_relationship(&self, guid: &str) -> Result<()>;
+
+    /// Check if a relationship exists
+    async fn relationship_exists(&self, guid: &str) -> Result<bool>;
+
+    /// List relationships where the given entity GUID is an endpoint
+    async fn list_relationships_by_entity(
+        &self,
+        entity_guid: &str,
+    ) -> Result<Vec<RelationshipHeader>>;
+
+    /// List relationships by relationship type name
+    async fn list_relationships_by_type(&self, type_name: &str) -> Result<Vec<RelationshipHeader>>;
+
+    /// List all relationship headers
+    async fn list_relationships(&self) -> Result<Vec<RelationshipHeader>>;
+}
+
+// ============================================================================
+// Storage Key Helpers
+// ============================================================================
+
 /// Type prefix for KV storage
 const TYPE_PREFIX: &[u8] = b"type:";
 
@@ -69,6 +116,15 @@ const ENTITY_PREFIX: &[u8] = b"entity:";
 
 /// Entity type index prefix
 const ENTITY_TYPE_INDEX_PREFIX: &[u8] = b"entity_type:";
+
+/// Relationship prefix for KV storage
+const RELATIONSHIP_PREFIX: &[u8] = b"relationship:";
+
+/// Relationship endpoint index prefix (for looking up relationships by entity GUID)
+const RELATIONSHIP_ENDPOINT_INDEX_PREFIX: &[u8] = b"rel_endpoint:";
+
+/// Relationship type index prefix
+const RELATIONSHIP_TYPE_INDEX_PREFIX: &[u8] = b"rel_type:";
 
 /// Build the key for storing a type definition
 pub fn type_key(name: &str) -> Vec<u8> {
@@ -87,6 +143,33 @@ pub fn entity_key(guid: &str) -> Vec<u8> {
 /// Build the key for entity type index
 pub fn entity_type_index_key(type_name: &str, guid: &str) -> Vec<u8> {
     let mut key = ENTITY_TYPE_INDEX_PREFIX.to_vec();
+    key.extend_from_slice(type_name.as_bytes());
+    key.push(b':');
+    key.extend_from_slice(guid.as_bytes());
+    key
+}
+
+/// Build the key for storing a relationship by GUID
+pub fn relationship_key(guid: &str) -> Vec<u8> {
+    let mut key = RELATIONSHIP_PREFIX.to_vec();
+    key.extend_from_slice(guid.as_bytes());
+    key
+}
+
+/// Build the key for relationship endpoint index
+/// Format: rel_endpoint:{entity_guid}:{relationship_guid}
+pub fn relationship_endpoint_index_key(entity_guid: &str, relationship_guid: &str) -> Vec<u8> {
+    let mut key = RELATIONSHIP_ENDPOINT_INDEX_PREFIX.to_vec();
+    key.extend_from_slice(entity_guid.as_bytes());
+    key.push(b':');
+    key.extend_from_slice(relationship_guid.as_bytes());
+    key
+}
+
+/// Build the key for relationship type index
+/// Format: rel_type:{type_name}:{guid}
+pub fn relationship_type_index_key(type_name: &str, guid: &str) -> Vec<u8> {
+    let mut key = RELATIONSHIP_TYPE_INDEX_PREFIX.to_vec();
     key.extend_from_slice(type_name.as_bytes());
     key.push(b':');
     key.extend_from_slice(guid.as_bytes());

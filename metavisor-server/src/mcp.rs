@@ -9,7 +9,7 @@ use rmcp::{
     model::*,
     schemars::JsonSchema,
     service::RequestContext,
-    tool, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
 };
 use serde::{Deserialize, Serialize};
 
@@ -591,6 +591,7 @@ impl MetavisorMcpServer {
 // ServerHandler Implementation
 // ============================================================================
 
+#[tool_handler]
 impl ServerHandler for MetavisorMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {

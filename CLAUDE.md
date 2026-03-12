@@ -87,8 +87,39 @@ Metavisor includes an MCP server for AI assistant integration, built with the [r
 
 ### Transport Modes
 
-- **HTTP** (default): JSON-RPC over HTTP at `/mcp` endpoint
-- **Stdio**: For direct process communication (used by MCP clients)
+- **HTTP**: JSON-RPC over HTTP at `/mcp` endpoint (runs as part of the main server)
+- **Stdio**: Standalone binary for direct process communication (used by Claude Code and other MCP clients)
+
+### Running the Stdio MCP Server (for Claude Code)
+
+The stdio MCP server is a standalone binary that communicates over stdin/stdout, making it compatible with Claude Code and other MCP clients.
+
+```bash
+# Run the stdio MCP server
+cargo run --bin metavisor-mcp
+
+# Or with a custom data directory
+cargo run --bin metavisor-mcp -- --data-dir /path/to/data
+
+# Build release binary
+cargo build --release --bin metavisor-mcp
+```
+
+### Configuring Claude Code
+
+Add the following to your Claude Code configuration to use Metavisor as an MCP server:
+
+**macOS/Linux** (`~/.config/claude/claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "metavisor": {
+      "command": "/path/to/metavisor/target/release/metavisor-mcp",
+      "args": ["--data-dir", "/path/to/metavisor/data"]
+    }
+  }
+}
+```
 
 ### Available Tools
 

@@ -162,50 +162,6 @@ async fn test_health_check() {
 }
 
 #[tokio::test]
-async fn test_create_relationship() {
-    let client = client();
-
-    // Setup
-    ensure_entity_types(&client).await;
-    ensure_relationship_type(&client).await;
-    let (table_guid, column_guid) = create_test_entities(&client).await;
-
-    // Create relationship
-    let relationship = json!({
-        "typeName": "rel_test_table_columns",
-        "end1": {
-            "typeName": "RelTestTable",
-            "guid": table_guid
-        },
-        "end2": {
-            "typeName": "RelTestColumn",
-            "guid": column_guid
-        },
-        "label": "contains"
-    });
-
-    let response = client
-        .post(format!("{}/api/metavisor/v1/relationship", TEST_SERVER_URL))
-        .header("Content-Type", "application/json")
-        .json(&relationship)
-        .send()
-        .await
-        .expect("Failed to create relationship");
-
-    let status = response.status();
-    assert!(
-        status == 201 || status == 200,
-        "Create relationship should return 201 or 200, got {}",
-        status
-    );
-
-    let body: Value = response.json().await.expect("Failed to parse JSON");
-    assert!(body["relationship"]["guid"].is_string());
-    assert_eq!(body["relationship"]["typeName"], "rel_test_table_columns");
-    assert_eq!(body["relationship"]["label"], "contains");
-}
-
-#[tokio::test]
 async fn test_create_and_get_relationship() {
     let client = client();
 
@@ -236,6 +192,13 @@ async fn test_create_and_get_relationship() {
         .await
         .expect("Failed to create relationship");
 
+    let status = create_response.status();
+    assert!(
+        status == 201 || status == 200,
+        "Create relationship should return 201 or 200, got {}",
+        status
+    );
+
     let create_body: Value = create_response
         .json()
         .await
@@ -243,8 +206,13 @@ async fn test_create_and_get_relationship() {
     let rel_guid = create_body["relationship"]["guid"]
         .as_str()
         .expect("Missing relationship GUID");
+    assert_eq!(
+        create_body["relationship"]["typeName"],
+        "rel_test_table_columns"
+    );
+    assert_eq!(create_body["relationship"]["label"], "test_get_rel");
 
-    // Get relationship by GUID
+    // Get relationship by GUID and verify content
     let get_response = client
         .get(format!(
             "{}/api/metavisor/v1/relationship/guid/{}",
@@ -398,6 +366,141 @@ async fn test_delete_relationship() {
         .expect("Failed to get relationship");
 
     assert_eq!(get_response.status(), 404);
+}
+
+#[tokio::test]
+async fn test_recreate_relationship_after_deletion() {
+    let client = client();
+
+    // Setup
+    ensure_entity_types(&client).await;
+    ensure_relationship_type(&client).await;
+    let (table_guid, column_guid) = create_test_entities(&client).await;
+
+    let relationship = json!({
+        "typeName": "rel_test_table_columns",
+        "end1": {
+            "typeName": "RelTestTable",
+            "guid": table_guid
+        },
+        "end2": {
+            "typeName": "RelTestColumn",
+            "guid": column_guid
+        },
+        "label": "test_recreate"
+    });
+
+    // 1. Create relationship
+    let create_response1 = client
+        .post(format!("{}/api/metavisor/v1/relationship", TEST_SERVER_URL))
+        .header("Content-Type", "application/json")
+        .json(&relationship)
+        .send()
+        .await
+        .expect("Failed to create relationship");
+
+    let status = create_response1.status();
+    assert!(
+        status == 201 || status == 200,
+        "First creation should succeed, got {}",
+        status
+    );
+
+    let create_body1: Value = create_response1.json().await.expect("Failed to parse JSON");
+    let guid1 = create_body1["relationship"]["guid"]
+        .as_str()
+        .expect("GUID should be present");
+
+    // Verify creation
+    let get_response1 = client
+        .get(format!(
+            "{}/api/metavisor/v1/relationship/guid/{}",
+            TEST_SERVER_URL, guid1
+        ))
+        .send()
+        .await
+        .expect("Failed to get relationship");
+    assert_eq!(get_response1.status(), 200);
+
+    // 2. Delete relationship
+    let delete_response = client
+        .delete(format!(
+            "{}/api/metavisor/v1/relationship/guid/{}",
+            TEST_SERVER_URL, guid1
+        ))
+        .send()
+        .await
+        .expect("Failed to delete relationship");
+    assert_eq!(delete_response.status(), 204);
+
+    // Verify deletion
+    let get_response2 = client
+        .get(format!(
+            "{}/api/metavisor/v1/relationship/guid/{}",
+            TEST_SERVER_URL, guid1
+        ))
+        .send()
+        .await
+        .expect("Failed to get relationship");
+    assert_eq!(
+        get_response2.status(),
+        404,
+        "Relationship should be deleted"
+    );
+
+    // 3. Recreate relationship (will get a new GUID)
+    let create_response2 = client
+        .post(format!("{}/api/metavisor/v1/relationship", TEST_SERVER_URL))
+        .header("Content-Type", "application/json")
+        .json(&relationship)
+        .send()
+        .await
+        .expect("Failed to recreate relationship");
+
+    let status = create_response2.status();
+    assert!(
+        status == 201 || status == 200,
+        "Recreation after deletion should succeed, got {}",
+        status
+    );
+
+    let create_body2: Value = create_response2.json().await.expect("Failed to parse JSON");
+    let guid2 = create_body2["relationship"]["guid"]
+        .as_str()
+        .expect("GUID should be present");
+
+    // Verify recreation - new GUID should be different
+    assert_ne!(
+        guid1, guid2,
+        "New relationship should have a different GUID"
+    );
+
+    let get_response3 = client
+        .get(format!(
+            "{}/api/metavisor/v1/relationship/guid/{}",
+            TEST_SERVER_URL, guid2
+        ))
+        .send()
+        .await
+        .expect("Failed to get recreated relationship");
+    assert_eq!(get_response3.status(), 200);
+    let get_body: Value = get_response3.json().await.expect("Failed to parse JSON");
+    assert_eq!(get_body["relationship"]["guid"], guid2);
+    assert_eq!(
+        get_body["relationship"]["typeName"],
+        "rel_test_table_columns"
+    );
+    assert_eq!(get_body["relationship"]["label"], "test_recreate");
+
+    // Cleanup
+    client
+        .delete(format!(
+            "{}/api/metavisor/v1/relationship/guid/{}",
+            TEST_SERVER_URL, guid2
+        ))
+        .send()
+        .await
+        .ok();
 }
 
 #[tokio::test]

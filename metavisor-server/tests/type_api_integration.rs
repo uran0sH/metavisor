@@ -139,6 +139,79 @@ async fn test_type_crud_lifecycle() {
     let type_body: Value = get_response.json().await.expect("Failed to parse JSON");
     assert!(type_body["entityDefs"].is_array());
 
+    // Verify the retrieved type content
+    let entity_defs = type_body["entityDefs"]
+        .as_array()
+        .expect("entityDefs should be an array");
+    assert!(!entity_defs.is_empty(), "entityDefs should not be empty");
+
+    let entity_def = &entity_defs[0];
+    assert_eq!(entity_def["name"].as_str(), Some(type_name.as_str()));
+    assert!(entity_def["superTypes"].is_array());
+    assert!(entity_def["attributeDefs"].is_array());
+
+    // Verify superTypes contains "DataSet"
+    let super_types: Vec<&str> = entity_def["superTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s.as_str())
+        .collect();
+    assert!(
+        super_types.contains(&"DataSet"),
+        "superTypes should contain DataSet"
+    );
+
+    // Verify specific attributes exist
+    let attr_defs = entity_def["attributeDefs"].as_array().unwrap();
+    let attr_names: Vec<&str> = attr_defs
+        .iter()
+        .filter_map(|a| a["name"].as_str())
+        .collect();
+
+    // Check that key attributes from the JSON file are present
+    assert!(
+        attr_names.contains(&"column_id"),
+        "Should have column_id attribute"
+    );
+    assert!(
+        attr_names.contains(&"column_name"),
+        "Should have column_name attribute"
+    );
+    assert!(
+        attr_names.contains(&"table_name"),
+        "Should have table_name attribute"
+    );
+    assert!(
+        attr_names.contains(&"db_name"),
+        "Should have db_name attribute"
+    );
+
+    // Verify column_id attribute details (required field)
+    let column_id_attr = attr_defs
+        .iter()
+        .find(|a| a["name"].as_str() == Some("column_id"))
+        .expect("column_id attribute should exist");
+    assert_eq!(column_id_attr["typeName"].as_str(), Some("string"));
+    assert_eq!(
+        column_id_attr["isOptional"].as_bool(),
+        Some(false),
+        "column_id should be required"
+    );
+
+    // Verify table_description attribute details (optional field)
+    let table_desc_attr = attr_defs
+        .iter()
+        .find(|a| a["name"].as_str() == Some("table_description"));
+    if let Some(attr) = table_desc_attr {
+        assert_eq!(attr["typeName"].as_str(), Some("string"));
+        assert_eq!(
+            attr["isOptional"].as_bool(),
+            Some(true),
+            "table_description should be optional"
+        );
+    }
+
     // 3. Get type headers
     let headers_response = client
         .get(format!(
@@ -270,6 +343,47 @@ async fn test_create_enum_type() {
         status
     );
 
+    // Get and verify the enum type
+    let get_response = client
+        .get(format!(
+            "{}/api/metavisor/v1/types/typedef/name/test_status",
+            TEST_SERVER_URL
+        ))
+        .send()
+        .await
+        .expect("Failed to get enum type");
+
+    assert_eq!(get_response.status(), 200);
+    let enum_body: Value = get_response.json().await.expect("Failed to parse JSON");
+    assert!(enum_body["enumDefs"].is_array());
+
+    let enum_defs = enum_body["enumDefs"]
+        .as_array()
+        .expect("enumDefs should be an array");
+    assert!(!enum_defs.is_empty(), "enumDefs should not be empty");
+
+    let enum_def = &enum_defs[0];
+    assert_eq!(enum_def["name"].as_str(), Some("test_status"));
+    assert_eq!(enum_def["description"].as_str(), Some("Test status enum"));
+    assert_eq!(enum_def["defaultValue"].as_str(), Some("ACTIVE"));
+
+    // Verify element definitions
+    let element_defs = enum_def["elementDefs"]
+        .as_array()
+        .expect("elementDefs should be an array");
+    let element_values: Vec<&str> = element_defs
+        .iter()
+        .filter_map(|e| e["value"].as_str())
+        .collect();
+    assert!(
+        element_values.contains(&"ACTIVE"),
+        "Should have ACTIVE element"
+    );
+    assert!(
+        element_values.contains(&"INACTIVE"),
+        "Should have INACTIVE element"
+    );
+
     // Cleanup
     let delete_json = json!({
         "enumDefs": [{"name": "test_status"}]
@@ -317,6 +431,48 @@ async fn test_create_classification_type() {
         status == 201 || status == 200,
         "Create classification type should return 201 or 200, got {}",
         status
+    );
+
+    // Get and verify the classification type
+    let get_response = client
+        .get(format!(
+            "{}/api/metavisor/v1/types/typedef/name/test_pii",
+            TEST_SERVER_URL
+        ))
+        .send()
+        .await
+        .expect("Failed to get classification type");
+
+    assert_eq!(get_response.status(), 200);
+    let classification_body: Value = get_response.json().await.expect("Failed to parse JSON");
+    assert!(classification_body["classificationDefs"].is_array());
+
+    let classification_defs = classification_body["classificationDefs"]
+        .as_array()
+        .expect("classificationDefs should be an array");
+    assert!(
+        !classification_defs.is_empty(),
+        "classificationDefs should not be empty"
+    );
+
+    let classification_def = &classification_defs[0];
+    assert_eq!(classification_def["name"].as_str(), Some("test_pii"));
+    assert_eq!(
+        classification_def["description"].as_str(),
+        Some("PII classification for testing")
+    );
+
+    // Verify attribute definitions
+    let attr_defs = classification_def["attributeDefs"]
+        .as_array()
+        .expect("attributeDefs should be an array");
+    let attr_names: Vec<&str> = attr_defs
+        .iter()
+        .filter_map(|a| a["name"].as_str())
+        .collect();
+    assert!(
+        attr_names.contains(&"sensitivity"),
+        "Should have sensitivity attribute"
     );
 
     // Cleanup
@@ -367,6 +523,59 @@ async fn test_create_struct_type() {
         status == 201 || status == 200,
         "Create struct type should return 201 or 200, got {}",
         status
+    );
+
+    // Get and verify the struct type
+    let get_response = client
+        .get(format!(
+            "{}/api/metavisor/v1/types/typedef/name/test_address",
+            TEST_SERVER_URL
+        ))
+        .send()
+        .await
+        .expect("Failed to get struct type");
+
+    assert_eq!(get_response.status(), 200);
+    let struct_body: Value = get_response.json().await.expect("Failed to parse JSON");
+    assert!(struct_body["structDefs"].is_array());
+
+    let struct_defs = struct_body["structDefs"]
+        .as_array()
+        .expect("structDefs should be an array");
+    assert!(!struct_defs.is_empty(), "structDefs should not be empty");
+
+    let struct_def = &struct_defs[0];
+    assert_eq!(struct_def["name"].as_str(), Some("test_address"));
+    assert_eq!(
+        struct_def["description"].as_str(),
+        Some("Address struct for testing")
+    );
+
+    // Verify attribute definitions
+    let attr_defs = struct_def["attributeDefs"]
+        .as_array()
+        .expect("attributeDefs should be an array");
+    let attr_names: Vec<&str> = attr_defs
+        .iter()
+        .filter_map(|a| a["name"].as_str())
+        .collect();
+    assert!(
+        attr_names.contains(&"street"),
+        "Should have street attribute"
+    );
+    assert!(attr_names.contains(&"city"), "Should have city attribute");
+    assert!(attr_names.contains(&"zip"), "Should have zip attribute");
+
+    // Verify street attribute is required (isOptional: false)
+    let street_attr = attr_defs
+        .iter()
+        .find(|a| a["name"].as_str() == Some("street"))
+        .expect("street attribute should exist");
+    assert_eq!(street_attr["typeName"].as_str(), Some("string"));
+    assert_eq!(
+        street_attr["isOptional"].as_bool(),
+        Some(false),
+        "street should be required"
     );
 
     // Cleanup
@@ -425,6 +634,48 @@ async fn test_create_relationship_type() {
         "Create relationship type should return 201 or 200, got {}",
         status
     );
+
+    // Get and verify the relationship type
+    let get_response = client
+        .get(format!(
+            "{}/api/metavisor/v1/types/typedef/name/test_table_columns",
+            TEST_SERVER_URL
+        ))
+        .send()
+        .await
+        .expect("Failed to get relationship type");
+
+    assert_eq!(get_response.status(), 200);
+    let rel_body: Value = get_response.json().await.expect("Failed to parse JSON");
+    assert!(rel_body["relationshipDefs"].is_array());
+
+    let rel_defs = rel_body["relationshipDefs"]
+        .as_array()
+        .expect("relationshipDefs should be an array");
+    assert!(!rel_defs.is_empty(), "relationshipDefs should not be empty");
+
+    let rel_def = &rel_defs[0];
+    assert_eq!(rel_def["name"].as_str(), Some("test_table_columns"));
+    assert_eq!(
+        rel_def["description"].as_str(),
+        Some("Table to columns relationship")
+    );
+    assert_eq!(
+        rel_def["relationshipCategory"].as_str(),
+        Some("COMPOSITION")
+    );
+    assert_eq!(rel_def["propagateTags"].as_str(), Some("ONE_TO_TWO"));
+
+    // Verify end definitions
+    let end_def1 = &rel_def["endDef1"];
+    assert_eq!(end_def1["type"].as_str(), Some("DataSet"));
+    assert_eq!(end_def1["name"].as_str(), Some("columns"));
+    assert_eq!(end_def1["cardinality"].as_str(), Some("SET"));
+
+    let end_def2 = &rel_def["endDef2"];
+    assert_eq!(end_def2["type"].as_str(), Some("DataSet"));
+    assert_eq!(end_def2["name"].as_str(), Some("table"));
+    assert_eq!(end_def2["cardinality"].as_str(), Some("SINGLE"));
 
     // Cleanup
     let delete_json = json!({
@@ -498,6 +749,124 @@ async fn test_duplicate_type_creation() {
     let delete_json = json!({
         "entityDefs": [{"name": "test_duplicate"}]
     });
+    client
+        .delete(format!(
+            "{}/api/metavisor/v1/types/typedefs",
+            TEST_SERVER_URL
+        ))
+        .header("Content-Type", "application/json")
+        .json(&delete_json)
+        .send()
+        .await
+        .ok();
+}
+
+#[tokio::test]
+async fn test_recreate_type_after_deletion() {
+    let client = client();
+
+    let type_name = format!("test_recreate_{}", std::process::id());
+
+    let entity_type = json!({
+        "entityDefs": [{
+            "name": type_name,
+            "superTypes": ["DataSet"],
+            "attributeDefs": [
+                {"name": "id", "typeName": "string", "isOptional": false}
+            ]
+        }]
+    });
+
+    // 1. Create type
+    let create_response1 = client
+        .post(format!(
+            "{}/api/metavisor/v1/types/typedefs",
+            TEST_SERVER_URL
+        ))
+        .header("Content-Type", "application/json")
+        .json(&entity_type)
+        .send()
+        .await
+        .expect("Failed to create type");
+
+    let status = create_response1.status();
+    assert!(
+        status == 201 || status == 200,
+        "First creation should succeed, got {}",
+        status
+    );
+
+    // Verify creation
+    let get_response1 = client
+        .get(format!(
+            "{}/api/metavisor/v1/types/typedef/name/{}",
+            TEST_SERVER_URL, type_name
+        ))
+        .send()
+        .await
+        .expect("Failed to get type");
+    assert_eq!(get_response1.status(), 200);
+
+    // 2. Delete type
+    let delete_json = json!({
+        "entityDefs": [{"name": type_name}]
+    });
+    let delete_response = client
+        .delete(format!(
+            "{}/api/metavisor/v1/types/typedefs",
+            TEST_SERVER_URL
+        ))
+        .header("Content-Type", "application/json")
+        .json(&delete_json)
+        .send()
+        .await
+        .expect("Failed to delete type");
+    assert_eq!(delete_response.status(), 204);
+
+    // Verify deletion
+    let get_response2 = client
+        .get(format!(
+            "{}/api/metavisor/v1/types/typedef/name/{}",
+            TEST_SERVER_URL, type_name
+        ))
+        .send()
+        .await
+        .expect("Failed to get type");
+    assert_eq!(get_response2.status(), 404, "Type should be deleted");
+
+    // 3. Recreate type with same name
+    let create_response2 = client
+        .post(format!(
+            "{}/api/metavisor/v1/types/typedefs",
+            TEST_SERVER_URL
+        ))
+        .header("Content-Type", "application/json")
+        .json(&entity_type)
+        .send()
+        .await
+        .expect("Failed to recreate type");
+
+    let status = create_response2.status();
+    assert!(
+        status == 201 || status == 200,
+        "Recreation after deletion should succeed, got {}",
+        status
+    );
+
+    // Verify recreation
+    let get_response3 = client
+        .get(format!(
+            "{}/api/metavisor/v1/types/typedef/name/{}",
+            TEST_SERVER_URL, type_name
+        ))
+        .send()
+        .await
+        .expect("Failed to get recreated type");
+    assert_eq!(get_response3.status(), 200);
+    let body: Value = get_response3.json().await.expect("Failed to parse JSON");
+    assert_eq!(body["entityDefs"][0]["name"], type_name);
+
+    // Cleanup
     client
         .delete(format!(
             "{}/api/metavisor/v1/types/typedefs",

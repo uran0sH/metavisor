@@ -18,7 +18,17 @@ use metavisor_core::{
     RelationshipHeader, RelationshipStore, TypeDef, TypeStore,
 };
 
-use crate::routes::AppCombinedState;
+// ============================================================================
+// MCP State
+// ============================================================================
+
+/// Combined state for MCP server operations
+#[derive(Clone)]
+pub struct McpState {
+    pub type_store: Arc<dyn TypeStore>,
+    pub entity_store: Arc<dyn EntityStore>,
+    pub relationship_store: Arc<dyn RelationshipStore>,
+}
 
 // ============================================================================
 // MCP Server Handler
@@ -26,19 +36,15 @@ use crate::routes::AppCombinedState;
 
 #[derive(Clone)]
 pub struct MetavisorMcpServer {
-    type_store: Arc<dyn TypeStore>,
-    entity_store: Arc<dyn EntityStore>,
-    relationship_store: Arc<dyn RelationshipStore>,
+    state: McpState,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
 
 impl MetavisorMcpServer {
-    pub fn new(state: AppCombinedState) -> Self {
+    pub fn new(state: McpState) -> Self {
         Self {
-            type_store: state.type_store,
-            entity_store: state.entity_store,
-            relationship_store: state.relationship_store,
+            state,
             tool_router: Self::tool_router(),
         }
     }
@@ -56,6 +62,7 @@ impl MetavisorMcpServer {
         Parameters(args): Parameters<SearchEntitiesArgs>,
     ) -> Result<CallToolResult, McpError> {
         let headers = self
+            .state
             .entity_store
             .list_entities_by_type(&args.type_name)
             .await
@@ -87,6 +94,7 @@ impl MetavisorMcpServer {
         Parameters(args): Parameters<GetEntityArgs>,
     ) -> Result<CallToolResult, McpError> {
         let entity = self
+            .state
             .entity_store
             .get_entity(&args.guid)
             .await
@@ -104,6 +112,7 @@ impl MetavisorMcpServer {
     )]
     async fn list_types(&self) -> Result<CallToolResult, McpError> {
         let types = self
+            .state
             .type_store
             .list_types()
             .await
@@ -132,6 +141,7 @@ impl MetavisorMcpServer {
         Parameters(args): Parameters<GetTypeArgs>,
     ) -> Result<CallToolResult, McpError> {
         let type_def = self
+            .state
             .type_store
             .get_type(&args.name)
             .await
@@ -169,6 +179,7 @@ impl MetavisorMcpServer {
         }
 
         let guid = self
+            .state
             .entity_store
             .create_entity(&entity)
             .await
@@ -191,6 +202,7 @@ impl MetavisorMcpServer {
     ) -> Result<CallToolResult, McpError> {
         // Get existing entity to preserve status
         let existing = self
+            .state
             .entity_store
             .get_entity(&args.guid)
             .await
@@ -216,7 +228,7 @@ impl MetavisorMcpServer {
             }
         }
 
-        self.entity_store
+        self.state.entity_store
             .update_entity(&entity)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -236,7 +248,7 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<DeleteEntityArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.entity_store
+        self.state.entity_store
             .delete_entity(&args.guid)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -284,7 +296,7 @@ impl MetavisorMcpServer {
 
         let type_def = TypeDef::Entity(entity_def);
 
-        self.type_store
+        self.state.type_store
             .create_type(&type_def)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -306,6 +318,7 @@ impl MetavisorMcpServer {
     ) -> Result<CallToolResult, McpError> {
         // Get existing type
         let existing = self
+            .state
             .type_store
             .get_type(&args.name)
             .await
@@ -353,7 +366,7 @@ impl MetavisorMcpServer {
 
         let type_def = TypeDef::Entity(entity_def);
 
-        self.type_store
+        self.state.type_store
             .update_type(&type_def)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -373,7 +386,7 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<DeleteTypeArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.type_store
+        self.state.type_store
             .delete_type(&args.name)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -412,8 +425,7 @@ impl MetavisorMcpServer {
             }
         }
 
-        let guid = self
-            .relationship_store
+        let guid = self.state.relationship_store
             .create_relationship(&relationship)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -433,8 +445,7 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<GetRelationshipArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let relationship = self
-            .relationship_store
+        let relationship = self.state.relationship_store
             .get_relationship(&args.guid)
             .await
             .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -454,8 +465,7 @@ impl MetavisorMcpServer {
         Parameters(args): Parameters<UpdateRelationshipArgs>,
     ) -> Result<CallToolResult, McpError> {
         // Get existing relationship to preserve endpoints and status
-        let existing = self
-            .relationship_store
+        let existing = self.state.relationship_store
             .get_relationship(&args.guid)
             .await
             .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -493,7 +503,7 @@ impl MetavisorMcpServer {
             }
         }
 
-        self.relationship_store
+        self.state.relationship_store
             .update_relationship(&relationship)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -513,7 +523,7 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<DeleteRelationshipArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.relationship_store
+        self.state.relationship_store
             .delete_relationship(&args.guid)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -533,8 +543,7 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<ListRelationshipsByEntityArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let headers = self
-            .relationship_store
+        let headers = self.state.relationship_store
             .list_relationships_by_entity(&args.entity_guid)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -564,8 +573,7 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<ListRelationshipsByTypeArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let headers = self
-            .relationship_store
+        let headers = self.state.relationship_store
             .list_relationships_by_type(&args.type_name)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -623,6 +631,7 @@ impl ServerHandler for MetavisorMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         let headers = self
+            .state
             .entity_store
             .list_entities()
             .await
@@ -661,6 +670,7 @@ impl ServerHandler for MetavisorMcpServer {
     ) -> Result<ReadResourceResult, McpError> {
         if let Some(guid) = request.uri.strip_prefix("metavisor://entity/") {
             let entity = self
+                .state
                 .entity_store
                 .get_entity(guid)
                 .await
@@ -1031,7 +1041,7 @@ use axum::{
 };
 
 /// Handle MCP JSON-RPC requests over HTTP using rmcp
-pub async fn handle_mcp_request(State(state): State<AppCombinedState>, body: String) -> Response {
+pub async fn handle_mcp_request(State(state): State<McpState>, body: String) -> Response {
     use tokio::io::duplex;
 
     // Create a duplex stream for communication

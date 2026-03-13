@@ -15,15 +15,7 @@ use crate::handlers::{
     list_relationships_by_type, list_type_headers, update_entity, update_relationship,
     update_types, AppState, EntityAppState, RelationshipAppState,
 };
-use crate::mcp::handle_mcp_request;
-
-/// Combined application state for MCP
-#[derive(Clone)]
-pub struct AppCombinedState {
-    pub type_store: Arc<dyn TypeStore>,
-    pub entity_store: Arc<dyn EntityStore>,
-    pub relationship_store: Arc<dyn RelationshipStore>,
-}
+use crate::mcp::{handle_mcp_request, McpState};
 
 /// Create the API router
 pub fn create_router(
@@ -41,7 +33,7 @@ pub fn create_router(
     let relationship_state = RelationshipAppState {
         relationship_store: relationship_store.clone(),
     };
-    let mcp_state = AppCombinedState {
+    let mcp_state = McpState {
         type_store,
         entity_store,
         relationship_store,

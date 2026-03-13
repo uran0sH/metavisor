@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(KvRelationshipStore::new(kv_store, type_store.clone()));
 
     // Create the MCP server
-    let server = MetavisorMcpServer::new(metavisor_server::routes::AppCombinedState {
+    let server = MetavisorMcpServer::new(metavisor_server::mcp::McpState {
         type_store,
         entity_store,
         relationship_store,

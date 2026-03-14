@@ -21,6 +21,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
+http = "1"
 metavisor-core.workspace = true
 metavisor-storage.workspace = true
 anyhow.workspace = true

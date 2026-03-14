@@ -15,7 +15,7 @@ use crate::handlers::{
     list_relationships_by_type, list_type_headers, update_entity, update_relationship,
     update_types, AppState, EntityAppState, RelationshipAppState,
 };
-use crate::mcp::{handle_mcp_request, McpState};
+use crate::mcp::{McpHttpService, McpState};
 
 /// Create the API router
 pub fn create_router(
@@ -39,12 +39,23 @@ pub fn create_router(
         relationship_store,
     };
 
+    // Create MCP HTTP service with proper session management
+    let mcp_service = McpHttpService::new(mcp_state);
+
     Router::new()
         // Health check
         .route("/health", get(health))
         .route("/api/metavisor/v1", get(api_info))
         // MCP endpoint
-        .route("/mcp", post(handle_mcp_request).with_state(mcp_state))
+        .route("/mcp", post(handle_mcp).with_state(mcp_service.clone()))
+        .route(
+            "/mcp",
+            axum::routing::get(handle_mcp).with_state(mcp_service.clone()),
+        )
+        .route(
+            "/mcp",
+            axum::routing::delete(handle_mcp).with_state(mcp_service),
+        )
         // Type management
         .route(
             "/api/metavisor/v1/types/typedefs",
@@ -130,4 +141,12 @@ async fn health() -> &'static str {
 /// API info endpoint
 async fn api_info() -> &'static str {
     "Metavisor API v1"
+}
+
+/// MCP endpoint handler - delegates to McpHttpService
+async fn handle_mcp(
+    axum::extract::State(service): axum::extract::State<McpHttpService>,
+    req: http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    service.handle(req).await
 }

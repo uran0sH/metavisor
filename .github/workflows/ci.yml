@@ -117,6 +117,7 @@ jobs:
           # Run integration tests
           cargo test --test type_api_integration
           cargo test --test entity_api_integration
+          cargo test --test mcp_test
 
           # Cleanup
           kill $SERVER_PID 2>/dev/null || true

@@ -1312,6 +1312,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "http",
  "metavisor-core",
  "metavisor-storage",
  "reqwest",

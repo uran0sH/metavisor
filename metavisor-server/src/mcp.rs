@@ -9,9 +9,10 @@ use rmcp::{
     model::*,
     schemars::JsonSchema,
     service::RequestContext,
-    tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde::{Deserialize, Serialize};
+use tower::ServiceExt;
 
 use metavisor_core::{
     AttributeDef, Entity, EntityDef, EntityHeader, EntityStore, ObjectId, Relationship,
@@ -228,7 +229,8 @@ impl MetavisorMcpServer {
             }
         }
 
-        self.state.entity_store
+        self.state
+            .entity_store
             .update_entity(&entity)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -248,7 +250,8 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<DeleteEntityArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.state.entity_store
+        self.state
+            .entity_store
             .delete_entity(&args.guid)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -296,7 +299,8 @@ impl MetavisorMcpServer {
 
         let type_def = TypeDef::Entity(entity_def);
 
-        self.state.type_store
+        self.state
+            .type_store
             .create_type(&type_def)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -366,7 +370,8 @@ impl MetavisorMcpServer {
 
         let type_def = TypeDef::Entity(entity_def);
 
-        self.state.type_store
+        self.state
+            .type_store
             .update_type(&type_def)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -386,7 +391,8 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<DeleteTypeArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.state.type_store
+        self.state
+            .type_store
             .delete_type(&args.name)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -425,7 +431,9 @@ impl MetavisorMcpServer {
             }
         }
 
-        let guid = self.state.relationship_store
+        let guid = self
+            .state
+            .relationship_store
             .create_relationship(&relationship)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -445,7 +453,9 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<GetRelationshipArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let relationship = self.state.relationship_store
+        let relationship = self
+            .state
+            .relationship_store
             .get_relationship(&args.guid)
             .await
             .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -465,7 +475,9 @@ impl MetavisorMcpServer {
         Parameters(args): Parameters<UpdateRelationshipArgs>,
     ) -> Result<CallToolResult, McpError> {
         // Get existing relationship to preserve endpoints and status
-        let existing = self.state.relationship_store
+        let existing = self
+            .state
+            .relationship_store
             .get_relationship(&args.guid)
             .await
             .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -503,7 +515,8 @@ impl MetavisorMcpServer {
             }
         }
 
-        self.state.relationship_store
+        self.state
+            .relationship_store
             .update_relationship(&relationship)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -523,7 +536,8 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<DeleteRelationshipArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.state.relationship_store
+        self.state
+            .relationship_store
             .delete_relationship(&args.guid)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -543,7 +557,9 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<ListRelationshipsByEntityArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let headers = self.state.relationship_store
+        let headers = self
+            .state
+            .relationship_store
             .list_relationships_by_entity(&args.entity_guid)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -573,7 +589,9 @@ impl MetavisorMcpServer {
         &self,
         Parameters(args): Parameters<ListRelationshipsByTypeArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let headers = self.state.relationship_store
+        let headers = self
+            .state
+            .relationship_store
             .list_relationships_by_type(&args.type_name)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1031,92 +1049,63 @@ fn format_relationship(r: &Relationship) -> String {
 }
 
 // ============================================================================
-// HTTP Handler (Bridge to Axum)
+// HTTP Service using rmcp StreamableHttpService
 // ============================================================================
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Json, Response},
-};
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
-/// Handle MCP JSON-RPC requests over HTTP using rmcp
-pub async fn handle_mcp_request(State(state): State<McpState>, body: String) -> Response {
-    use tokio::io::duplex;
+/// Shared MCP HTTP service state
+pub struct McpHttpService {
+    service: StreamableHttpService<
+        MetavisorMcpServer,
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
+    >,
+}
 
-    // Create a duplex stream for communication
-    let (mut client_tx, server_rx) = duplex(4096);
-    let (mut client_rx, server_tx) = duplex(4096);
-
-    // Create the MCP server
-    let server = MetavisorMcpServer::new(state);
-
-    // Spawn the server task
-    let server_task = tokio::spawn(async move {
-        let transport = (server_rx, server_tx);
-        let server = server.serve(transport).await;
-        if let Ok(server) = server {
-            let _ = server.waiting().await;
+impl Clone for McpHttpService {
+    fn clone(&self) -> Self {
+        Self {
+            service: self.service.clone(),
         }
-    });
-
-    // Send the request to the server
-    let request_bytes = format!("{}\n", body);
-    use tokio::io::AsyncWriteExt;
-    if let Err(e) = client_tx.write_all(request_bytes.as_bytes()).await {
-        server_task.abort();
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": null,
-                "error": {"code": -32603, "message": format!("Failed to send request: {}", e)}
-            })),
-        )
-            .into_response();
     }
-    let _ = client_tx.shutdown().await;
+}
 
-    // Read the response
-    use tokio::io::AsyncReadExt;
-    let mut response_bytes = Vec::new();
-    if let Err(e) = client_rx.read_to_end(&mut response_bytes).await {
-        server_task.abort();
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": null,
-                "error": {"code": -32603, "message": format!("Failed to read response: {}", e)}
-            })),
-        )
-            .into_response();
+impl McpHttpService {
+    pub fn new(state: McpState) -> Self {
+        let config = StreamableHttpServerConfig {
+            sse_keep_alive: Some(Duration::from_secs(15)),
+            sse_retry: Some(Duration::from_secs(3)),
+            stateful_mode: true,
+            cancellation_token: CancellationToken::new(),
+        };
+
+        let session_manager = std::sync::Arc::new(
+            rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+        );
+
+        let service = StreamableHttpService::new(
+            move || Ok(MetavisorMcpServer::new(state.clone())),
+            session_manager,
+            config,
+        );
+
+        Self { service }
     }
 
-    let _ = server_task.await;
-
-    // Parse and return the response
-    match String::from_utf8(response_bytes) {
-        Ok(response_str) => match serde_json::from_str::<serde_json::Value>(&response_str) {
-            Ok(json_response) => (StatusCode::OK, Json(json_response)).into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": {"code": -32603, "message": format!("Invalid JSON response: {}", e)}
-                })),
-            )
-                .into_response(),
-        },
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": null,
-                "error": {"code": -32603, "message": format!("Invalid UTF-8 response: {}", e)}
-            })),
-        )
-            .into_response(),
+    pub async fn handle(&self, req: http::Request<axum::body::Body>) -> axum::response::Response {
+        let mut service = self.service.clone();
+        match ServiceExt::oneshot(&mut service, req).await {
+            Ok(response) => {
+                // Convert http::Response to axum::Response
+                let (parts, body) = response.into_parts();
+                axum::response::Response::from_parts(parts, axum::body::Body::new(body))
+            }
+            Err(_) => axum::response::Response::builder()
+                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::from("Internal server error"))
+                .unwrap(),
+        }
     }
 }

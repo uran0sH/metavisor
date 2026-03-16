@@ -6,38 +6,34 @@ use axum::{
 };
 use std::sync::Arc;
 
-use metavisor_core::{EntityStore, RelationshipStore, TypeStore};
+use metavisor_core::MetavisorStore;
 
 use crate::handlers::{
     create_entities, create_entity, create_relationship, create_types, delete_entity_by_guid,
-    delete_relationship_by_guid, delete_types, get_all_types, get_entity_by_guid,
-    get_relationship_by_guid, get_type_by_guid, get_type_by_name, list_relationships_by_entity,
-    list_relationships_by_type, list_type_headers, update_entity, update_relationship,
-    update_types, AppState, EntityAppState, RelationshipAppState,
+    delete_relationship_by_guid, delete_types, get_all_types, get_entity_by_guid, get_graph_stats,
+    get_input_lineage, get_lineage_graph, get_output_lineage, get_relationship_by_guid,
+    get_type_by_guid, get_type_by_name, list_relationships_by_entity, list_relationships_by_type,
+    list_type_headers, rebuild_graph, update_entity, update_relationship, update_types,
+    EntityAppState, GraphAppState, MetavisorAppState, RelationshipAppState,
 };
 use crate::mcp::{McpHttpService, McpState};
 
 /// Create the API router
-pub fn create_router(
-    type_store: Arc<dyn TypeStore>,
-    entity_store: Arc<dyn EntityStore>,
-    relationship_store: Arc<dyn RelationshipStore>,
-) -> Router {
+pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
     // Create type-specific states for handlers
-    let type_state = AppState {
-        type_store: type_store.clone(),
+    let type_state = MetavisorAppState {
+        store: store.clone(),
     };
     let entity_state = EntityAppState {
-        entity_store: entity_store.clone(),
+        store: store.clone(),
     };
     let relationship_state = RelationshipAppState {
-        relationship_store: relationship_store.clone(),
+        store: store.clone(),
     };
-    let mcp_state = McpState {
-        type_store,
-        entity_store,
-        relationship_store,
+    let graph_state = GraphAppState {
+        store: store.clone(),
     };
+    let mcp_state = McpState { store };
 
     // Create MCP HTTP service with proper session management
     let mcp_service = McpHttpService::new(mcp_state);
@@ -131,6 +127,29 @@ pub fn create_router(
             "/api/metavisor/v1/relationship/type/{type_name}",
             get(list_relationships_by_type).with_state(relationship_state),
         )
+        // Lineage endpoints (Atlas-compatible)
+        .route(
+            "/api/metavisor/v1/lineage/{guid}",
+            get(get_lineage_graph).with_state(graph_state.clone()),
+        )
+        // Convenience endpoints for input/output lineage
+        .route(
+            "/api/metavisor/v1/lineage/{guid}/inputs",
+            get(get_input_lineage).with_state(graph_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/lineage/{guid}/outputs",
+            get(get_output_lineage).with_state(graph_state.clone()),
+        )
+        // Graph management
+        .route(
+            "/api/metavisor/v1/graph/rebuild",
+            post(rebuild_graph).with_state(graph_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/graph/stats",
+            get(get_graph_stats).with_state(graph_state),
+        )
 }
 
 /// Health check endpoint
@@ -142,7 +161,6 @@ async fn health() -> &'static str {
 async fn api_info() -> &'static str {
     "Metavisor API v1"
 }
-
 /// MCP endpoint handler - delegates to McpHttpService
 async fn handle_mcp(
     axum::extract::State(service): axum::extract::State<McpHttpService>,

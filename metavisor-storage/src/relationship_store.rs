@@ -5,6 +5,7 @@ use metavisor_core::{
     relationship_endpoint_index_key, relationship_key, relationship_type_index_key, CoreError,
     Relationship, RelationshipHeader, RelationshipStore, Result, TypeDef, TypeStore,
 };
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::kv::{KvStore, WriteOp};
@@ -12,12 +13,12 @@ use crate::kv::{KvStore, WriteOp};
 /// KvRelationshipStore - RelationshipStore implementation using surrealkv
 pub struct KvRelationshipStore {
     kv: KvStore,
-    type_store: std::sync::Arc<dyn TypeStore>,
+    type_store: Arc<dyn TypeStore>,
 }
 
 impl KvRelationshipStore {
     /// Create a new KvRelationshipStore with type validation
-    pub fn new(kv: KvStore, type_store: std::sync::Arc<dyn TypeStore>) -> Self {
+    pub fn new(kv: KvStore, type_store: Arc<dyn TypeStore>) -> Self {
         Self { kv, type_store }
     }
 

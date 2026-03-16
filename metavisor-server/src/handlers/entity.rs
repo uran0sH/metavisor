@@ -9,14 +9,16 @@ use axum::{
 };
 use std::sync::Arc;
 
-use metavisor_core::{EntitiesWithExtInfo, Entity, EntityHeader, EntityStore, EntityWithExtInfo};
+use metavisor_core::{
+    EntitiesWithExtInfo, Entity, EntityHeader, EntityWithExtInfo, MetavisorStore,
+};
 
 use crate::error::Result;
 
 /// Application state containing stores
 #[derive(Clone)]
 pub struct EntityAppState {
-    pub entity_store: Arc<dyn EntityStore>,
+    pub store: Arc<dyn MetavisorStore>,
 }
 
 /// Create a single entity
@@ -26,7 +28,7 @@ pub async fn create_entity(
     State(state): State<EntityAppState>,
     Json(entity): Json<Entity>,
 ) -> Result<(StatusCode, Json<EntityWithExtInfo>)> {
-    let guid = state.entity_store.create_entity(&entity).await?;
+    let guid = state.store.create_entity(&entity).await?;
 
     // Return the created entity with the generated GUID
     let mut created = entity;
@@ -45,7 +47,7 @@ pub async fn create_entities(
     let mut created = EntitiesWithExtInfo::new();
 
     for entity in entities {
-        let guid = state.entity_store.create_entity(&entity).await?;
+        let guid = state.store.create_entity(&entity).await?;
         let mut entity_with_guid = entity;
         entity_with_guid.guid = Some(guid);
         created.add_entity(entity_with_guid);
@@ -61,7 +63,7 @@ pub async fn get_entity_by_guid(
     State(state): State<EntityAppState>,
     Path(guid): Path<String>,
 ) -> Result<Json<EntityWithExtInfo>> {
-    let entity = state.entity_store.get_entity(&guid).await?;
+    let entity = state.store.get_entity(&guid).await?;
     Ok(Json(EntityWithExtInfo::new(entity)))
 }
 
@@ -72,7 +74,7 @@ pub async fn update_entity(
     State(state): State<EntityAppState>,
     Json(entity): Json<Entity>,
 ) -> Result<Json<EntityWithExtInfo>> {
-    state.entity_store.update_entity(&entity).await?;
+    state.store.update_entity(&entity).await?;
     Ok(Json(EntityWithExtInfo::new(entity)))
 }
 
@@ -83,7 +85,7 @@ pub async fn delete_entity_by_guid(
     State(state): State<EntityAppState>,
     Path(guid): Path<String>,
 ) -> Result<StatusCode> {
-    state.entity_store.delete_entity(&guid).await?;
+    state.store.delete_entity(&guid).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -94,6 +96,6 @@ pub async fn delete_entity_by_guid(
 pub async fn list_entity_headers(
     State(state): State<EntityAppState>,
 ) -> Result<Json<Vec<EntityHeader>>> {
-    let headers = state.entity_store.list_entities().await?;
+    let headers = state.store.list_entities().await?;
     Ok(Json(headers))
 }

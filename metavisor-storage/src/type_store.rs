@@ -101,14 +101,58 @@ impl TypeStore for KvTypeStore {
     }
 
     async fn list_types(&self) -> Result<Vec<String>> {
-        // TODO: Implement proper scan with prefix
-        // For now, we'll need to add a scan method to KvStore
-        Ok(Vec::new())
+        // Scan the KV store for all keys under the type prefix.
+        // Format: "type:{name}"
+        const TYPE_PREFIX: &[u8] = b"type:";
+
+        let entries: Vec<(Vec<u8>, TypeDef)> = self
+            .kv
+            .scan_prefix(TYPE_PREFIX)
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
+
+        let mut names: Vec<String> = entries
+            .into_iter()
+            .filter_map(|(key, _)| {
+                key.strip_prefix(TYPE_PREFIX).map(|suffix| {
+                    // Type names are ASCII-ish identifiers in this project; be permissive anyway.
+                    String::from_utf8_lossy(suffix).to_string()
+                })
+            })
+            .collect();
+
+        names.sort();
+        names.dedup();
+        Ok(names)
     }
 
     async fn list_types_by_category(&self, _category: TypeCategory) -> Result<Vec<String>> {
-        // TODO: Implement with secondary index
-        Ok(Vec::new())
+        // No secondary index yet; do a prefix scan and filter in memory.
+        const TYPE_PREFIX: &[u8] = b"type:";
+
+        let entries: Vec<(Vec<u8>, TypeDef)> = self
+            .kv
+            .scan_prefix(TYPE_PREFIX)
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
+
+        let mut names: Vec<String> = entries
+            .into_iter()
+            .filter_map(|(key, def)| {
+                if !matches!(
+                    (&def, _category),
+                    (TypeDef::Entity(_), TypeCategory::Entity)
+                        | (TypeDef::Relationship(_), TypeCategory::Relationship)
+                ) {
+                    return None;
+                }
+
+                key.strip_prefix(TYPE_PREFIX)
+                    .map(|suffix| String::from_utf8_lossy(suffix).to_string())
+            })
+            .collect();
+
+        names.sort();
+        names.dedup();
+        Ok(names)
     }
 }
 

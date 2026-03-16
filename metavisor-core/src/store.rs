@@ -1,8 +1,11 @@
-//! TypeStore, EntityStore, and RelationshipStore traits for CRUD operations
+//! TypeStore, EntityStore, RelationshipStore, and MetavisorStore traits for CRUD operations
 
 use async_trait::async_trait;
 
-use crate::{Entity, EntityHeader, Relationship, RelationshipHeader, Result, TypeDef};
+use crate::{
+    graph::{LineageQueryOptions, LineageResult, TraversalDirection},
+    Classification, Entity, EntityHeader, Relationship, RelationshipHeader, Result, TypeDef,
+};
 
 // ============================================================================
 // TypeStore Trait
@@ -174,4 +177,141 @@ pub fn relationship_type_index_key(type_name: &str, guid: &str) -> Vec<u8> {
     key.push(b':');
     key.extend_from_slice(guid.as_bytes());
     key
+}
+
+// ============================================================================
+// MetavisorStore Trait - Unified Abstraction Layer
+// ============================================================================
+
+/// MetavisorStore - Unified abstraction layer for all metadata operations
+///
+/// This trait provides a unified interface that coordinates:
+/// - KV storage (entities, relationships, types)
+/// - Graph storage (lineage, classification propagation)
+///
+/// All operations are transactional, ensuring consistency between KV and Graph.
+#[async_trait]
+pub trait MetavisorStore: Send + Sync {
+    // ========================================================================
+    // Type Operations
+    // ========================================================================
+
+    /// Create a new type definition
+    async fn create_type(&self, type_def: &TypeDef) -> Result<()>;
+
+    /// Get a type definition by name
+    async fn get_type(&self, name: &str) -> Result<TypeDef>;
+
+    /// Update a type definition
+    async fn update_type(&self, type_def: &TypeDef) -> Result<()>;
+
+    /// Delete a type definition by name
+    async fn delete_type(&self, name: &str) -> Result<()>;
+
+    /// Check if a type exists
+    async fn type_exists(&self, name: &str) -> Result<bool>;
+
+    /// List all type names
+    async fn list_types(&self) -> Result<Vec<String>>;
+
+    // ========================================================================
+    // Entity Operations (with Graph sync)
+    // ========================================================================
+
+    /// Create a new entity (syncs to graph)
+    async fn create_entity(&self, entity: &Entity) -> Result<String>;
+
+    /// Get an entity by GUID
+    async fn get_entity(&self, guid: &str) -> Result<Entity>;
+
+    /// Get an entity by type name and unique attributes
+    async fn get_entity_by_unique_attrs(
+        &self,
+        type_name: &str,
+        unique_attrs: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Entity>;
+
+    /// Update an entity
+    async fn update_entity(&self, entity: &Entity) -> Result<()>;
+
+    /// Delete an entity by GUID (syncs to graph)
+    async fn delete_entity(&self, guid: &str) -> Result<()>;
+
+    /// Check if an entity exists
+    async fn entity_exists(&self, guid: &str) -> Result<bool>;
+
+    /// List entity headers by type name
+    async fn list_entities_by_type(&self, type_name: &str) -> Result<Vec<EntityHeader>>;
+
+    /// List all entity headers
+    async fn list_entities(&self) -> Result<Vec<EntityHeader>>;
+
+    // ========================================================================
+    // Relationship Operations (with Graph sync)
+    // ========================================================================
+
+    /// Create a new relationship (syncs to graph)
+    async fn create_relationship(&self, relationship: &Relationship) -> Result<String>;
+
+    /// Get a relationship by GUID
+    async fn get_relationship(&self, guid: &str) -> Result<Relationship>;
+
+    /// Update a relationship
+    async fn update_relationship(&self, relationship: &Relationship) -> Result<()>;
+
+    /// Delete a relationship by GUID (syncs to graph)
+    async fn delete_relationship(&self, guid: &str) -> Result<()>;
+
+    /// Check if a relationship exists
+    async fn relationship_exists(&self, guid: &str) -> Result<bool>;
+
+    /// List relationships where the given entity GUID is an endpoint
+    async fn list_relationships_by_entity(
+        &self,
+        entity_guid: &str,
+    ) -> Result<Vec<RelationshipHeader>>;
+
+    /// List relationships by relationship type name
+    async fn list_relationships_by_type(&self, type_name: &str) -> Result<Vec<RelationshipHeader>>;
+
+    /// List all relationship headers
+    async fn list_relationships(&self) -> Result<Vec<RelationshipHeader>>;
+
+    // ========================================================================
+    // Graph / Lineage Operations
+    // ========================================================================
+
+    /// Build or rebuild the in-memory graph from persisted data
+    async fn rebuild_graph(&self) -> Result<()>;
+
+    /// Get lineage for an entity
+    async fn get_lineage(
+        &self,
+        entity_guid: &str,
+        direction: TraversalDirection,
+        options: LineageQueryOptions,
+    ) -> Result<LineageResult>;
+
+    /// Get all classifications for an entity (direct + propagated)
+    async fn get_all_classifications(&self, entity_guid: &str) -> Result<Vec<Classification>>;
+
+    /// Get immediate neighbors
+    async fn get_neighbors(
+        &self,
+        entity_guid: &str,
+        direction: TraversalDirection,
+    ) -> Result<Vec<crate::graph::LineageNode>>;
+
+    /// Check if a path exists between two entities
+    async fn path_exists(&self, from_guid: &str, to_guid: &str, max_depth: usize) -> Result<bool>;
+
+    /// Get graph statistics
+    fn graph_stats(&self) -> GraphStats;
+}
+
+/// Graph statistics
+#[derive(Debug, Clone, Default)]
+pub struct GraphStats {
+    pub node_count: usize,
+    pub edge_count: usize,
 }

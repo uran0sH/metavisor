@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use metavisor_core::{
-    EntityHeader, Relationship, RelationshipHeader, RelationshipStore, RelationshipWithExtInfo,
+    EntityHeader, MetavisorStore, Relationship, RelationshipHeader, RelationshipWithExtInfo,
 };
 
 use crate::error::Result;
@@ -19,7 +19,7 @@ use crate::error::Result;
 /// Application state containing stores
 #[derive(Clone)]
 pub struct RelationshipAppState {
-    pub relationship_store: Arc<dyn RelationshipStore>,
+    pub store: Arc<dyn MetavisorStore>,
 }
 
 /// Create a single relationship
@@ -29,11 +29,8 @@ pub async fn create_relationship(
     State(state): State<RelationshipAppState>,
     Json(relationship): Json<Relationship>,
 ) -> Result<(StatusCode, Json<RelationshipWithExtInfo>)> {
-    let guid = state
-        .relationship_store
-        .create_relationship(&relationship)
-        .await?;
-    let created = state.relationship_store.get_relationship(&guid).await?;
+    let guid = state.store.create_relationship(&relationship).await?;
+    let created = state.store.get_relationship(&guid).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -51,7 +48,7 @@ pub async fn get_relationship_by_guid(
     State(state): State<RelationshipAppState>,
     Path(guid): Path<String>,
 ) -> Result<Json<RelationshipWithExtInfo>> {
-    let relationship = state.relationship_store.get_relationship(&guid).await?;
+    let relationship = state.store.get_relationship(&guid).await?;
 
     // Build referred entities map (entities at endpoints)
     let mut referred_entities = HashMap::new();
@@ -87,13 +84,10 @@ pub async fn update_relationship(
     State(state): State<RelationshipAppState>,
     Json(relationship): Json<Relationship>,
 ) -> Result<Json<RelationshipWithExtInfo>> {
-    state
-        .relationship_store
-        .update_relationship(&relationship)
-        .await?;
+    state.store.update_relationship(&relationship).await?;
 
     let updated = state
-        .relationship_store
+        .store
         .get_relationship(relationship.guid.as_ref().unwrap())
         .await?;
 
@@ -110,7 +104,7 @@ pub async fn delete_relationship_by_guid(
     State(state): State<RelationshipAppState>,
     Path(guid): Path<String>,
 ) -> Result<StatusCode> {
-    state.relationship_store.delete_relationship(&guid).await?;
+    state.store.delete_relationship(&guid).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -123,7 +117,7 @@ pub async fn list_relationships_by_entity(
     Path(entity_guid): Path<String>,
 ) -> Result<Json<Vec<RelationshipHeader>>> {
     let headers = state
-        .relationship_store
+        .store
         .list_relationships_by_entity(&entity_guid)
         .await?;
     Ok(Json(headers))
@@ -136,9 +130,6 @@ pub async fn list_relationships_by_type(
     State(state): State<RelationshipAppState>,
     Path(type_name): Path<String>,
 ) -> Result<Json<Vec<RelationshipHeader>>> {
-    let headers = state
-        .relationship_store
-        .list_relationships_by_type(&type_name)
-        .await?;
+    let headers = state.store.list_relationships_by_type(&type_name).await?;
     Ok(Json(headers))
 }

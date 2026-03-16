@@ -13,9 +13,11 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use metavisor_core::{EntityStore, RelationshipStore, TypeStore};
 use metavisor_server::mcp::MetavisorMcpServer;
-use metavisor_storage::{KvEntityStore, KvRelationshipStore, KvStore, KvTypeStore};
+use metavisor_storage::{
+    DefaultMetavisorStore, InMemoryGraphStore, KvEntityStore, KvRelationshipStore, KvStore,
+    KvTypeStore,
+};
 use rmcp::ServiceExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -47,18 +49,27 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize storage
     let kv_store = KvStore::open(&args.data_dir)?;
-    let type_store: Arc<dyn TypeStore> = Arc::new(KvTypeStore::new(kv_store.clone()));
-    let entity_store: Arc<dyn EntityStore> =
-        Arc::new(KvEntityStore::new(kv_store.clone(), type_store.clone()));
-    let relationship_store: Arc<dyn RelationshipStore> =
-        Arc::new(KvRelationshipStore::new(kv_store, type_store.clone()));
+    let type_store = Arc::new(KvTypeStore::new(kv_store.clone()));
+    let entity_store = Arc::new(KvEntityStore::new(kv_store.clone(), type_store.clone()));
+    let relationship_store = Arc::new(KvRelationshipStore::new(kv_store, type_store.clone()));
+    let graph_store = Arc::new(InMemoryGraphStore::new(
+        entity_store.clone(),
+        relationship_store.clone(),
+    ));
 
-    // Create the MCP server
-    let server = MetavisorMcpServer::new(metavisor_server::mcp::McpState {
+    // Create unified MetavisorStore
+    let store = Arc::new(DefaultMetavisorStore::new(
         type_store,
         entity_store,
         relationship_store,
-    });
+        graph_store,
+    ));
+
+    // Initialize graph from persisted data
+    store.initialize().await?;
+
+    // Create the MCP server
+    let server = MetavisorMcpServer::new(metavisor_server::mcp::McpState { store });
 
     tracing::info!("MCP server initialized, starting stdio transport");
 

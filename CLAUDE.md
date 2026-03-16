@@ -141,6 +141,8 @@ Add the following to your Claude Code configuration to use Metavisor as an MCP s
 | `delete_relationship` | Delete a relationship by GUID |
 | `list_relationships_by_entity` | List all relationships for an entity |
 | `list_relationships_by_type` | List all relationships of a specific type |
+| `get_upstream_lineage` | Get upstream (input) lineage for an entity |
+| `get_downstream_lineage` | Get downstream (output) lineage for an entity |
 
 ### Available Resources
 
@@ -206,3 +208,39 @@ Relationship operations use atomic transactions to ensure consistency:
 - Create: writes main data + endpoint indices + type index atomically
 - Delete: removes all indices atomically
 - Uses `KvStore::batch_write()` for atomicity
+
+## Lineage API (Atlas-compatible)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/metavisor/v1/lineage/{guid}` | GET | Get lineage (Atlas-compatible) |
+| `/api/metavisor/v1/lineage/{guid}/inputs` | GET | Get upstream (input) lineage |
+| `/api/metavisor/v1/lineage/{guid}/outputs` | GET | Get downstream (output) lineage |
+| `/api/metavisor/v1/graph/rebuild` | POST | Rebuild in-memory graph from storage |
+| `/api/metavisor/v1/graph/stats` | GET | Get graph statistics |
+
+### Query Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `direction` | `BOTH` | Direction: `INPUT`, `OUTPUT`, or `BOTH` |
+| `depth` | `3` | Maximum traversal depth |
+| `relationship_types` | (all) | Comma-separated relationship type filter |
+| `entity_types` | (all) | Comma-separated entity type filter |
+| `include_propagated_classifications` | `true` | Include propagated classifications |
+
+### Example Usage
+
+```bash
+# Atlas-compatible: Get lineage with direction parameter
+curl "http://localhost:31000/api/metavisor/v1/lineage/{guid}?direction=INPUT&depth=5"
+
+# Convenience: Get upstream lineage
+curl "http://localhost:31000/api/metavisor/v1/lineage/{guid}/inputs?depth=3"
+
+# Convenience: Get downstream lineage
+curl "http://localhost:31000/api/metavisor/v1/lineage/{guid}/outputs?depth=3"
+
+# Filter by relationship types
+curl "http://localhost:31000/api/metavisor/v1/lineage/{guid}?direction=OUTPUT&relationship_types=process_inputs,process_outputs"
+```

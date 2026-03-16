@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use tower::ServiceExt;
 
 use metavisor_core::{
-    AttributeDef, Entity, EntityDef, EntityHeader, EntityStore, ObjectId, Relationship,
-    RelationshipHeader, RelationshipStore, TypeDef, TypeStore,
+    AttributeDef, Entity, EntityDef, EntityHeader, LineageQueryOptions, MetavisorStore, ObjectId,
+    Relationship, RelationshipHeader, TraversalDirection, TypeDef,
 };
 
 // ============================================================================
@@ -26,9 +26,7 @@ use metavisor_core::{
 /// Combined state for MCP server operations
 #[derive(Clone)]
 pub struct McpState {
-    pub type_store: Arc<dyn TypeStore>,
-    pub entity_store: Arc<dyn EntityStore>,
-    pub relationship_store: Arc<dyn RelationshipStore>,
+    pub store: Arc<dyn MetavisorStore>,
 }
 
 // ============================================================================
@@ -64,7 +62,7 @@ impl MetavisorMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let headers = self
             .state
-            .entity_store
+            .store
             .list_entities_by_type(&args.type_name)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -96,7 +94,7 @@ impl MetavisorMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let entity = self
             .state
-            .entity_store
+            .store
             .get_entity(&args.guid)
             .await
             .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -114,7 +112,7 @@ impl MetavisorMcpServer {
     async fn list_types(&self) -> Result<CallToolResult, McpError> {
         let types = self
             .state
-            .type_store
+            .store
             .list_types()
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -143,7 +141,7 @@ impl MetavisorMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let type_def = self
             .state
-            .type_store
+            .store
             .get_type(&args.name)
             .await
             .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -181,7 +179,7 @@ impl MetavisorMcpServer {
 
         let guid = self
             .state
-            .entity_store
+            .store
             .create_entity(&entity)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -204,7 +202,7 @@ impl MetavisorMcpServer {
         // Get existing entity to preserve status
         let existing = self
             .state
-            .entity_store
+            .store
             .get_entity(&args.guid)
             .await
             .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -230,7 +228,7 @@ impl MetavisorMcpServer {
         }
 
         self.state
-            .entity_store
+            .store
             .update_entity(&entity)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -251,7 +249,7 @@ impl MetavisorMcpServer {
         Parameters(args): Parameters<DeleteEntityArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.state
-            .entity_store
+            .store
             .delete_entity(&args.guid)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -300,7 +298,7 @@ impl MetavisorMcpServer {
         let type_def = TypeDef::Entity(entity_def);
 
         self.state
-            .type_store
+            .store
             .create_type(&type_def)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -323,7 +321,7 @@ impl MetavisorMcpServer {
         // Get existing type
         let existing = self
             .state
-            .type_store
+            .store
             .get_type(&args.name)
             .await
             .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -371,7 +369,7 @@ impl MetavisorMcpServer {
         let type_def = TypeDef::Entity(entity_def);
 
         self.state
-            .type_store
+            .store
             .update_type(&type_def)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -392,7 +390,7 @@ impl MetavisorMcpServer {
         Parameters(args): Parameters<DeleteTypeArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.state
-            .type_store
+            .store
             .delete_type(&args.name)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -433,7 +431,7 @@ impl MetavisorMcpServer {
 
         let guid = self
             .state
-            .relationship_store
+            .store
             .create_relationship(&relationship)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -455,7 +453,7 @@ impl MetavisorMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let relationship = self
             .state
-            .relationship_store
+            .store
             .get_relationship(&args.guid)
             .await
             .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -477,7 +475,7 @@ impl MetavisorMcpServer {
         // Get existing relationship to preserve endpoints and status
         let existing = self
             .state
-            .relationship_store
+            .store
             .get_relationship(&args.guid)
             .await
             .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -516,7 +514,7 @@ impl MetavisorMcpServer {
         }
 
         self.state
-            .relationship_store
+            .store
             .update_relationship(&relationship)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -537,7 +535,7 @@ impl MetavisorMcpServer {
         Parameters(args): Parameters<DeleteRelationshipArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.state
-            .relationship_store
+            .store
             .delete_relationship(&args.guid)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -559,7 +557,7 @@ impl MetavisorMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let headers = self
             .state
-            .relationship_store
+            .store
             .list_relationships_by_entity(&args.entity_guid)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -591,7 +589,7 @@ impl MetavisorMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let headers = self
             .state
-            .relationship_store
+            .store
             .list_relationships_by_type(&args.type_name)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -610,6 +608,56 @@ impl MetavisorMcpServer {
             .join("\n\n");
 
         Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    // ========================================================================
+    // Lineage Tools
+    // ========================================================================
+
+    /// Get upstream (input) lineage for a data entity.
+    #[tool(
+        name = "get_upstream_lineage",
+        description = "Get the upstream (input) lineage for a data entity. Shows all data sources that contribute to this entity, tracing back through the data flow."
+    )]
+    async fn get_upstream_lineage(
+        &self,
+        Parameters(args): Parameters<GetLineageArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let options = LineageQueryOptions::new().with_depth(args.depth.unwrap_or(3));
+
+        let result = self
+            .state
+            .store
+            .get_lineage(&args.guid, TraversalDirection::Input, options)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            format_lineage_result(&result),
+        )]))
+    }
+
+    /// Get downstream (output) lineage for a data entity.
+    #[tool(
+        name = "get_downstream_lineage",
+        description = "Get the downstream (output) lineage for a data entity. Shows all entities that depend on or are derived from this entity."
+    )]
+    async fn get_downstream_lineage(
+        &self,
+        Parameters(args): Parameters<GetLineageArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let options = LineageQueryOptions::new().with_depth(args.depth.unwrap_or(3));
+
+        let result = self
+            .state
+            .store
+            .get_lineage(&args.guid, TraversalDirection::Output, options)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            format_lineage_result(&result),
+        )]))
     }
 }
 
@@ -650,7 +698,7 @@ impl ServerHandler for MetavisorMcpServer {
     ) -> Result<ListResourcesResult, McpError> {
         let headers = self
             .state
-            .entity_store
+            .store
             .list_entities()
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -689,7 +737,7 @@ impl ServerHandler for MetavisorMcpServer {
         if let Some(guid) = request.uri.strip_prefix("metavisor://entity/") {
             let entity = self
                 .state
-                .entity_store
+                .store
                 .get_entity(guid)
                 .await
                 .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
@@ -855,6 +903,18 @@ pub struct ListRelationshipsByEntityArgs {
 pub struct ListRelationshipsByTypeArgs {
     #[schemars(description = "The relationship type name to filter by")]
     pub type_name: String,
+}
+
+// ============================================================================
+// Lineage Tool Argument Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GetLineageArgs {
+    #[schemars(description = "The GUID of the entity to trace lineage for")]
+    pub guid: String,
+    #[schemars(description = "Maximum depth to traverse (default: 3)")]
+    pub depth: Option<usize>,
 }
 
 // ============================================================================
@@ -1046,6 +1106,69 @@ fn format_relationship(r: &Relationship) -> String {
     }
 
     result
+}
+
+fn format_lineage_result(result: &metavisor_core::LineageResult) -> String {
+    let mut output = format!(
+        "# Lineage Result\n**Root Entity:** {}\n**Direction:** {}\n**Depth:** {}\n**Nodes:** {}\n**Edges:** {}\n",
+        result.root_guid,
+        result.direction,
+        result.depth,
+        result.nodes.len(),
+        result.edges.len()
+    );
+
+    // Format nodes
+    if !result.nodes.is_empty() {
+        output.push_str("\n## Nodes\n");
+        for node in &result.nodes {
+            let name = node.display_name.as_deref().unwrap_or("unnamed");
+            output.push_str(&format!(
+                "- **{}** ({}) - GUID: {}\n",
+                name, node.entity_type, node.id
+            ));
+
+            // Show classifications
+            if !node.classifications.is_empty() {
+                output.push_str(&format!(
+                    "  - Classifications: {}\n",
+                    node.classifications.join(", ")
+                ));
+            }
+
+            // Show propagated classifications
+            if !node.propagated_classifications.is_empty() {
+                let propagated: Vec<_> = node.propagated_classifications.iter().cloned().collect();
+                output.push_str(&format!("  - Propagated: {}\n", propagated.join(", ")));
+            }
+        }
+    }
+
+    // Format edges
+    if !result.edges.is_empty() {
+        output.push_str("\n## Relationships\n");
+        for edge in &result.edges {
+            let label = edge
+                .label
+                .as_deref()
+                .map(|l| format!(" [{}]", l))
+                .unwrap_or_default();
+            output.push_str(&format!(
+                "- {}{}: {} -> {}\n",
+                edge.relationship_type, label, edge.from_guid, edge.to_guid
+            ));
+        }
+    }
+
+    // Show adjacency summary for graph visualization
+    if !result.adjacency.is_empty() {
+        output.push_str("\n## Graph Structure\n");
+        for (from, to_list) in &result.adjacency {
+            output.push_str(&format!("{} -> [{}]\n", from, to_list.join(", ")));
+        }
+    }
+
+    output
 }
 
 // ============================================================================

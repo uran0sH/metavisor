@@ -5,26 +5,20 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use std::sync::Arc;
 
-use metavisor_core::{TypeDef, TypeHeader, TypeStore, TypesDef};
+use metavisor_core::{TypeDef, TypeHeader, TypesDef};
 
 use crate::error::Result;
-
-/// Application state containing stores
-#[derive(Clone)]
-pub struct AppState {
-    pub type_store: Arc<dyn TypeStore>,
-}
+use crate::handlers::MetavisorAppState;
 
 /// Get all type definitions
-pub async fn get_all_types(State(state): State<AppState>) -> Result<Json<TypesDef>> {
-    let type_names = state.type_store.list_types().await?;
+pub async fn get_all_types(State(state): State<MetavisorAppState>) -> Result<Json<TypesDef>> {
+    let type_names = state.store.list_types().await?;
 
     let mut result = TypesDef::new();
 
     for name in type_names {
-        if let Ok(type_def) = state.type_store.get_type(&name).await {
+        if let Ok(type_def) = state.store.get_type(&name).await {
             add_type_to_result(&mut result, type_def);
         }
     }
@@ -33,12 +27,14 @@ pub async fn get_all_types(State(state): State<AppState>) -> Result<Json<TypesDe
 }
 
 /// Get type headers (minimal info)
-pub async fn list_type_headers(State(state): State<AppState>) -> Result<Json<Vec<TypeHeader>>> {
-    let type_names = state.type_store.list_types().await?;
+pub async fn list_type_headers(
+    State(state): State<MetavisorAppState>,
+) -> Result<Json<Vec<TypeHeader>>> {
+    let type_names = state.store.list_types().await?;
     let mut headers = Vec::new();
 
     for name in type_names {
-        if let Ok(type_def) = state.type_store.get_type(&name).await {
+        if let Ok(type_def) = state.store.get_type(&name).await {
             let guid = type_def
                 .guid()
                 .map(|g| g.to_string())
@@ -57,10 +53,10 @@ pub async fn list_type_headers(State(state): State<AppState>) -> Result<Json<Vec
 
 /// Get type by name
 pub async fn get_type_by_name(
-    State(state): State<AppState>,
+    State(state): State<MetavisorAppState>,
     Path(name): Path<String>,
 ) -> Result<Json<TypesDef>> {
-    let type_def = state.type_store.get_type(&name).await?;
+    let type_def = state.store.get_type(&name).await?;
 
     let mut result = TypesDef::new();
     add_type_to_result(&mut result, type_def);
@@ -70,11 +66,11 @@ pub async fn get_type_by_name(
 
 /// Get type by GUID
 pub async fn get_type_by_guid(
-    State(state): State<AppState>,
+    State(state): State<MetavisorAppState>,
     Path(guid): Path<String>,
 ) -> Result<Json<TypesDef>> {
     // GUID is derived from name, so we need to list all types and find matching GUID
-    let type_names = state.type_store.list_types().await?;
+    let type_names = state.store.list_types().await?;
 
     for name in type_names {
         if generate_guid(&name) == guid {
@@ -90,7 +86,7 @@ pub async fn get_type_by_guid(
 
 /// Create types
 pub async fn create_types(
-    State(state): State<AppState>,
+    State(state): State<MetavisorAppState>,
     Json(req): Json<TypesDef>,
 ) -> Result<(StatusCode, Json<TypesDef>)> {
     let mut created = TypesDef::new();
@@ -98,7 +94,7 @@ pub async fn create_types(
     // Create entity types
     for entity_def in req.entity_defs {
         let type_def = TypeDef::from(entity_def);
-        state.type_store.create_type(&type_def).await?;
+        state.store.create_type(&type_def).await?;
         if let TypeDef::Entity(def) = type_def {
             created.entity_defs.push(def);
         }
@@ -107,7 +103,7 @@ pub async fn create_types(
     // Create classification types
     for class_def in req.classification_defs {
         let type_def = TypeDef::from(class_def);
-        state.type_store.create_type(&type_def).await?;
+        state.store.create_type(&type_def).await?;
         if let TypeDef::Classification(def) = type_def {
             created.classification_defs.push(def);
         }
@@ -116,7 +112,7 @@ pub async fn create_types(
     // Create struct types
     for struct_def in req.struct_defs {
         let type_def = TypeDef::from(struct_def);
-        state.type_store.create_type(&type_def).await?;
+        state.store.create_type(&type_def).await?;
         if let TypeDef::Struct(def) = type_def {
             created.struct_defs.push(def);
         }
@@ -125,7 +121,7 @@ pub async fn create_types(
     // Create enum types
     for enum_def in req.enum_defs {
         let type_def = TypeDef::from(enum_def);
-        state.type_store.create_type(&type_def).await?;
+        state.store.create_type(&type_def).await?;
         if let TypeDef::Enum(def) = type_def {
             created.enum_defs.push(def);
         }
@@ -134,7 +130,7 @@ pub async fn create_types(
     // Create relationship types
     for rel_def in req.relationship_defs {
         let type_def = TypeDef::from(rel_def);
-        state.type_store.create_type(&type_def).await?;
+        state.store.create_type(&type_def).await?;
         if let TypeDef::Relationship(def) = type_def {
             created.relationship_defs.push(def);
         }
@@ -145,7 +141,7 @@ pub async fn create_types(
 
 /// Update types
 pub async fn update_types(
-    State(state): State<AppState>,
+    State(state): State<MetavisorAppState>,
     Json(req): Json<TypesDef>,
 ) -> Result<Json<TypesDef>> {
     let mut updated = TypesDef::new();
@@ -153,7 +149,7 @@ pub async fn update_types(
     // Update entity types
     for entity_def in req.entity_defs {
         let type_def = TypeDef::from(entity_def);
-        state.type_store.update_type(&type_def).await?;
+        state.store.update_type(&type_def).await?;
         if let TypeDef::Entity(def) = type_def {
             updated.entity_defs.push(def);
         }
@@ -162,7 +158,7 @@ pub async fn update_types(
     // Update classification types
     for class_def in req.classification_defs {
         let type_def = TypeDef::from(class_def);
-        state.type_store.update_type(&type_def).await?;
+        state.store.update_type(&type_def).await?;
         if let TypeDef::Classification(def) = type_def {
             updated.classification_defs.push(def);
         }
@@ -171,7 +167,7 @@ pub async fn update_types(
     // Update struct types
     for struct_def in req.struct_defs {
         let type_def = TypeDef::from(struct_def);
-        state.type_store.update_type(&type_def).await?;
+        state.store.update_type(&type_def).await?;
         if let TypeDef::Struct(def) = type_def {
             updated.struct_defs.push(def);
         }
@@ -180,7 +176,7 @@ pub async fn update_types(
     // Update enum types
     for enum_def in req.enum_defs {
         let type_def = TypeDef::from(enum_def);
-        state.type_store.update_type(&type_def).await?;
+        state.store.update_type(&type_def).await?;
         if let TypeDef::Enum(def) = type_def {
             updated.enum_defs.push(def);
         }
@@ -189,7 +185,7 @@ pub async fn update_types(
     // Update relationship types
     for rel_def in req.relationship_defs {
         let type_def = TypeDef::from(rel_def);
-        state.type_store.update_type(&type_def).await?;
+        state.store.update_type(&type_def).await?;
         if let TypeDef::Relationship(def) = type_def {
             updated.relationship_defs.push(def);
         }
@@ -200,32 +196,32 @@ pub async fn update_types(
 
 /// Delete types by name
 pub async fn delete_types(
-    State(state): State<AppState>,
+    State(state): State<MetavisorAppState>,
     Json(req): Json<TypesDef>,
 ) -> Result<StatusCode> {
     // Delete entity types
     for entity_def in &req.entity_defs {
-        state.type_store.delete_type(&entity_def.name).await?;
+        state.store.delete_type(&entity_def.name).await?;
     }
 
     // Delete classification types
     for class_def in &req.classification_defs {
-        state.type_store.delete_type(&class_def.name).await?;
+        state.store.delete_type(&class_def.name).await?;
     }
 
     // Delete struct types
     for struct_def in &req.struct_defs {
-        state.type_store.delete_type(&struct_def.name).await?;
+        state.store.delete_type(&struct_def.name).await?;
     }
 
     // Delete enum types
     for enum_def in &req.enum_defs {
-        state.type_store.delete_type(&enum_def.name).await?;
+        state.store.delete_type(&enum_def.name).await?;
     }
 
     // Delete relationship types
     for rel_def in &req.relationship_defs {
-        state.type_store.delete_type(&rel_def.name).await?;
+        state.store.delete_type(&rel_def.name).await?;
     }
 
     Ok(StatusCode::NO_CONTENT)

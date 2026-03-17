@@ -21,10 +21,11 @@ Metavisor is a data governance and metadata management platform, comparable to A
 |--------|------------|-------------|
 | Web Framework | **axum** | High-performance async framework based on Tokio/Hyper |
 | Graph Data Structure | **petgraph** | In-memory graph structure for lineage relationship computation |
-| Full-text Search | **tantivy** | Rust-native search engine, similar to Lucene |
+| Search Index | **LanceDB** | Embedded vector database with full-text search (Tantivy) and vector search (IVF-PQ) |
 | KV Storage | **surrealkv** | Embedded versioned KV storage with LSM-tree architecture |
 | Message Queue | **Abstraction Layer** | trait-based abstraction, future integration with Kafka/NATS, etc. |
 | Async Runtime | **tokio** | Rust standard async runtime |
+| MCP Server | **rmcp** | Model Context Protocol SDK for AI assistant integration |
 
 ---
 
@@ -37,14 +38,18 @@ Metavisor is a data governance and metadata management platform, comparable to A
 │  │   REST API  │  │  Handlers   │  │        DTO/Models       │  │
 │  │   (axum)    │  │             │  │                         │  │
 │  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                    MCP Server (rmcp)                        ││
+│  │              AI Assistant Integration                       ││
+│  └─────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Core Layer                                │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │ Type System │  │   Graph     │  │      Search Engine      │  │
-│  │             │  │   Engine    │  │       (tantivy)         │  │
+│  │ Type System │  │   Graph     │  │    Search Interface     │  │
+│  │             │  │   Engine    │  │     (SearchStore)       │  │
 │  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────────────┐│
 │  │                    Message Queue (trait)                     ││
@@ -55,12 +60,17 @@ Metavisor is a data governance and metadata management platform, comparable to A
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       Storage Layer                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │   Graph     │  │    Index    │  │       KV Store          │  │
-│  │ (petgraph)  │  │  (tantivy)  │  │     (surrealkv)         │  │
-│  │ In-memory   │  │ Full-text   │  │    Persistent Storage    │  │
-│  │   Compute   │  │   Index     │  │                          │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
+│  ┌─────────────┐  ┌─────────────────────────────────────────┐   │
+│  │   Graph     │  │            Search Index (LanceDB)        │   │
+│  │ (petgraph)  │  │  ┌───────────┐ ┌───────────┐ ┌────────┐ │   │
+│  │ In-memory   │  │  │  FTS      │ │  Vector   │ │ Scalar │ │   │
+│  │   Compute   │  │  │ (Tantivy) │ │ (IVF-PQ)  │ │ Filter │ │   │
+│  └─────────────┘  │  └───────────┘ └───────────┘ └────────┘ │   │
+│                   └─────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                    KV Store (surrealkv)                  │    │
+│  │                  Persistent Storage                      │    │
+│  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -80,6 +90,7 @@ metavisor-core/             # Core layer crate
 └── src/
     ├── lib.rs
     ├── error.rs
+    ├── store.rs            # Store traits (TypeStore, EntityStore, MetavisorStore)
     ├── types/              # Type system
     │   ├── mod.rs
     │   ├── entity.rs
@@ -99,8 +110,21 @@ metavisor-storage/          # Storage layer crate
     ├── lib.rs
     ├── error.rs
     ├── kv.rs               # KV storage (surrealkv)
-    ├── graph_store.rs      # Graph persistence
-    └── index.rs            # Search index (tantivy)
+    ├── type_store.rs       # Type persistence
+    ├── entity_store.rs     # Entity persistence
+    ├── relationship_store.rs # Relationship persistence
+    ├── graph_store.rs      # Graph (petgraph) for lineage
+    ├── metavisor_store.rs  # Unified MetavisorStore implementation
+    └── search/             # Search index (LanceDB)
+        ├── mod.rs
+        ├── store.rs        # SearchStore trait
+        ├── lancedb_store.rs # LanceDB implementation
+        ├── types.rs        # SearchQuery, SearchResult types
+        ├── schema.rs       # LanceDB schema definitions
+        └── embedding/      # Embedding providers
+            ├── mod.rs
+            ├── provider.rs # EmbeddingProvider trait
+            └── openai.rs   # OpenAI embedding implementation
 
 metavisor-server/           # HTTP server crate
 ├── Cargo.toml
@@ -114,8 +138,12 @@ metavisor-server/           # HTTP server crate
     │   ├── lineage.rs
     │   └── search.rs
     ├── dto.rs
+    ├── mcp/                # MCP server integration
+    │   ├── mod.rs
+    │   └── server.rs
     └── bin/
-        └── metavisor.rs    # Executable entry point
+        ├── metavisor.rs    # HTTP server entry point
+        └── metavisor-mcp.rs # Stdio MCP server entry point
 
 metavisor-mq/               # Message queue crate
 ├── Cargo.toml
@@ -185,7 +213,18 @@ name = "metavisor-storage"
 thiserror.workspace = true
 tokio.workspace = true
 surrealkv = { git = "https://github.com/surrealdb/surrealkv" }
-tantivy = "0.22"
+lancedb = "0.10"
+arrow-array = "52"
+arrow-schema = "52"
+
+# Optional embedding providers
+[features]
+default = []
+embedding-openai = ["reqwest"]
+
+[dependencies.reqwest]
+version = "0.12"
+optional = true
 
 # metavisor-server/Cargo.toml
 [package]
@@ -235,8 +274,11 @@ pub enum StorageError {
     #[error("KV store error: {0}")]
     Kv(#[from] surrealkv::Error),
 
-    #[error("Index error: {0}")]
-    Index(#[from] tantivy::TantivyError),
+    #[error("Search index error: {0}")]
+    Search(String),
+
+    #[error("Embedding error: {0}")]
+    Embedding(String),
 }
 
 // metavisor-server/src/error.rs
@@ -429,7 +471,43 @@ POST   /api/metavisor/v1/entity/guid/:guid/classifications  # Add classification
 
 # Search
 GET    /api/metavisor/v1/search?q=keyword            # Full-text search
-GET    /api/metavisor/v1/search/dsl                  # DSL advanced search
+POST   /api/metavisor/v1/search/semantic             # Semantic (vector) search
+POST   /api/metavisor/v1/search/hybrid               # Hybrid search (FTS + vector)
+POST   /api/metavisor/v1/search/reindex              # Rebuild search index
+GET    /api/metavisor/v1/search/stats                # Index statistics
+```
+
+### 5.2 Search API Examples
+
+```json
+// POST /api/metavisor/v1/search/semantic
+{
+    "query": "tables containing sensitive user information",
+    "type_names": ["Table", "Column"],
+    "limit": 10
+}
+
+// POST /api/metavisor/v1/search/hybrid
+{
+    "query": "user order data",
+    "vector_weight": 0.7,
+    "text_weight": 0.3,
+    "limit": 10
+}
+
+// Response
+{
+    "hits": [
+        {
+            "guid": "abc-123",
+            "type_name": "Table",
+            "name": "users",
+            "score": 0.89,
+            "highlight": "...sensitive <em>user</em> information..."
+        }
+    ],
+    "total": 42
+}
 ```
 
 ---
@@ -439,10 +517,43 @@ GET    /api/metavisor/v1/search/dsl                  # DSL advanced search
 | Data Type | Storage Location | Description |
 |-----------|------------------|-------------|
 | Type Definitions | KV Store | Schema information, low change frequency |
-| Entity Data | KV Store + Index | KV stores complete data, Index supports search |
+| Entity Data | KV Store + Search Index | KV stores complete data, LanceDB supports search |
 | Lineage Relationships | Graph (In-memory) + KV | petgraph computes lineage, KV persists |
-| Classifications/Tags | KV Store + Index | Supports search by classification |
-| Search Index | Tantivy Index | Full-text search, DSL queries |
+| Classifications/Tags | KV Store + Search Index | Supports search by classification |
+| Search Index | LanceDB | Full-text search (Tantivy) + Vector search (IVF-PQ) |
+
+### 6.1 LanceDB Search Index
+
+LanceDB serves as the unified search index with three capabilities:
+
+| Capability | Implementation | Use Case |
+|------------|---------------|----------|
+| **Full-text Search** | Built-in Tantivy | Search by name, description, attributes |
+| **Vector Search** | IVF-PQ index | Semantic search with embeddings |
+| **Scalar Filtering** | Lance columnar format | Filter by type, status, classification |
+
+### 6.2 Index Synchronization
+
+```
+Entity Write Flow:
+    │
+    ├── 1. Write to KV Store (primary, blocking)
+    │
+    ├── 2. Write to Graph Store (lineage, with rollback)
+    │
+    └── 3. Write to Search Index (async, non-blocking)
+            └── Failure logged, background retry
+```
+
+### 6.3 Embedding Strategy
+
+Vector search is optional and configurable:
+
+| Provider | Use Case | Configuration |
+|----------|----------|---------------|
+| **OpenAI** | Production, high quality | `embedding-openai` feature |
+| **Local Model** | Offline, privacy-sensitive | Future: `embedding-local` feature |
+| **Disabled** | No vector search needed | Default |
 
 ---
 
@@ -451,32 +562,42 @@ GET    /api/metavisor/v1/search/dsl                  # DSL advanced search
 ### Phase 1: Basic Infrastructure
 - [x] Project skeleton setup
 - [x] Error handling framework
-- [x] Storage layer basic implementation (KV + Index)
+- [x] Storage layer basic implementation (KV)
 
 ### Phase 2: Type System
 - [x] TypeDef / AttributeDef definitions
 - [x] Entity CRUD
 - [x] Type validation logic
 - [x] Type system REST API implementation
+- [x] Relationship CRUD
 
 ### Phase 3: Lineage Tracking
-- [ ] petgraph integration
-- [ ] Lineage relationship storage
-- [ ] Upstream/downstream queries
-- [ ] Lineage REST API implementation
+- [x] petgraph integration
+- [x] Lineage relationship storage
+- [x] Upstream/downstream queries
+- [x] Lineage REST API implementation
+- [x] Classification propagation through lineage
 
 ### Phase 4: Classification & Tagging
-- [ ] Classification definitions
-- [ ] Entity classification associations
-- [ ] Lineage propagation logic
-- [ ] Classification REST API implementation
+- [x] Classification definitions
+- [x] Entity classification associations
+- [x] Lineage propagation logic
+- [x] Classification REST API implementation
 
-### Phase 5: Search Enhancement
-- [ ] tantivy index integration
+### Phase 5: Search Enhancement (LanceDB)
+- [ ] LanceDB integration
+- [ ] SearchStore trait implementation
 - [ ] Full-text search API
-- [ ] DSL advanced queries
+- [ ] Vector search (optional)
+- [ ] Hybrid search (FTS + vector)
 
-### Phase 6: Message Queue
+### Phase 6: MCP Integration
+- [x] MCP server with rmcp SDK
+- [x] HTTP transport (/mcp endpoint)
+- [x] Stdio transport (standalone binary)
+- [x] MCP tools for entity/lineage operations
+
+### Phase 7: Message Queue
 - [ ] MQ trait abstraction
 - [ ] In-memory implementation
 - [ ] Event publishing mechanism
@@ -490,3 +611,13 @@ GET    /api/metavisor/v1/search/dsl                  # DSL advanced search
 - **Distributed/k8s**: Scale from standalone to distributed
 - **GraphQL API**: Alternative or complement to REST API
 - **Web UI**: Lineage visualization, metadata browsing interface
+- **Local Embedding Model**: Candle-transformers for offline vector search
+- **LanceDB Enterprise**: Distributed vector search for large-scale deployments
+
+---
+
+## 9. References
+
+- [LanceDB Search Design](./lancedb-search-design.md) - Detailed LanceDB integration design
+- [Apache Atlas](https://atlas.apache.org/) - Reference architecture for metadata management
+- [LanceDB Documentation](https://docs.lancedb.com/) - Vector database documentation

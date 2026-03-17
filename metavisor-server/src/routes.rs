@@ -9,12 +9,14 @@ use std::sync::Arc;
 use metavisor_core::MetavisorStore;
 
 use crate::handlers::{
-    create_entities, create_entity, create_relationship, create_types, delete_entity_by_guid,
-    delete_relationship_by_guid, delete_types, get_all_types, get_entity_by_guid, get_graph_stats,
-    get_input_lineage, get_lineage_graph, get_output_lineage, get_relationship_by_guid,
-    get_type_by_guid, get_type_by_name, list_relationships_by_entity, list_relationships_by_type,
-    list_type_headers, rebuild_graph, update_entity, update_relationship, update_types,
-    EntityAppState, GraphAppState, MetavisorAppState, RelationshipAppState,
+    add_classifications, create_entities, create_entity, create_relationship, create_types,
+    delete_entity_by_guid, delete_relationship_by_guid, delete_types, get_all_classifications,
+    get_all_types, get_classifications, get_entity_by_guid, get_graph_stats, get_input_lineage,
+    get_lineage_graph, get_output_lineage, get_relationship_by_guid, get_type_by_guid,
+    get_type_by_name, list_relationships_by_entity, list_relationships_by_type, list_type_headers,
+    rebuild_graph, remove_classification, update_classifications, update_entity,
+    update_relationship, update_types, ClassificationAppState, EntityAppState, GraphAppState,
+    MetavisorAppState, RelationshipAppState,
 };
 use crate::mcp::{McpHttpService, McpState};
 
@@ -31,6 +33,9 @@ pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
         store: store.clone(),
     };
     let graph_state = GraphAppState {
+        store: store.clone(),
+    };
+    let classification_state = ClassificationAppState {
         store: store.clone(),
     };
     let mcp_state = McpState { store };
@@ -148,7 +153,28 @@ pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
         )
         .route(
             "/api/metavisor/v1/graph/stats",
-            get(get_graph_stats).with_state(graph_state),
+            get(get_graph_stats).with_state(graph_state.clone()),
+        )
+        // Classification management (Atlas-compatible)
+        .route(
+            "/api/metavisor/v1/entity/guid/{guid}/classifications",
+            get(get_classifications).with_state(classification_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/entity/guid/{guid}/classifications/all",
+            get(get_all_classifications).with_state(classification_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/entity/guid/{guid}/classifications",
+            post(add_classifications).with_state(classification_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/entity/guid/{guid}/classifications",
+            put(update_classifications).with_state(classification_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/entity/guid/{guid}/classifications/{classificationName}",
+            delete(remove_classification).with_state(classification_state),
         )
 }
 

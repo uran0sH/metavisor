@@ -45,6 +45,31 @@ impl DefaultMetavisorStore {
     pub async fn initialize(&self) -> Result<()> {
         self.graph_store.rebuild_graph().await
     }
+
+    /// Helper method to update entity and sync classifications to graph
+    async fn update_entity_classifications(&self, entity: &Entity) -> Result<()> {
+        // Update the entity in KV store
+        self.entity_store.update_entity(entity).await?;
+
+        // Extract classification names for graph update
+        let classification_names: Vec<String> = entity
+            .classifications
+            .iter()
+            .map(|c| c.type_name.clone())
+            .collect();
+
+        // Update the graph node to trigger re-propagation
+        self.graph_store
+            .update_entity_node(
+                entity.guid.as_deref().unwrap_or(""),
+                &entity.type_name,
+                None,
+                classification_names,
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -344,6 +369,72 @@ impl MetavisorStore for DefaultMetavisorStore {
         self.graph_store.get_all_classifications(entity_guid).await
     }
 
+    async fn add_classifications(
+        &self,
+        entity_guid: &str,
+        classifications: &[Classification],
+    ) -> Result<()> {
+        // Get the current entity
+        let mut entity = self.entity_store.get_entity(entity_guid).await?;
+
+        // Add new classifications (avoid duplicates)
+        for classification in classifications {
+            if !entity
+                .classifications
+                .iter()
+                .any(|c| c.type_name == classification.type_name)
+            {
+                entity.classifications.push(classification.clone());
+            }
+        }
+
+        // Update entity and sync to graph
+        self.update_entity_classifications(&entity).await?;
+
+        Ok(())
+    }
+
+    async fn get_classifications(&self, entity_guid: &str) -> Result<Vec<Classification>> {
+        let entity = self.entity_store.get_entity(entity_guid).await?;
+        Ok(entity.classifications)
+    }
+
+    async fn update_classifications(
+        &self,
+        entity_guid: &str,
+        classifications: &[Classification],
+    ) -> Result<()> {
+        // Get the current entity
+        let mut entity = self.entity_store.get_entity(entity_guid).await?;
+
+        // Replace all classifications
+        entity.classifications = classifications.to_vec();
+
+        // Update entity and sync to graph
+        self.update_entity_classifications(&entity).await?;
+
+        Ok(())
+    }
+
+    async fn remove_classification(
+        &self,
+        entity_guid: &str,
+        classification_name: &str,
+    ) -> Result<()> {
+        // Get the current entity
+        let mut entity = self.entity_store.get_entity(entity_guid).await?;
+
+        // Remove the classification
+        entity
+            .classifications
+            .retain(|c| c.type_name != classification_name);
+
+        // Update entity and sync to graph
+        self.update_entity_classifications(&entity).await?;
+
+        Ok(())
+    }
+
     async fn get_neighbors(
         &self,
         entity_guid: &str,
@@ -607,5 +698,113 @@ mod tests {
         // Delete type
         store.delete_type("TestType").await.unwrap();
         assert!(!store.type_exists("TestType").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_add_classifications() {
+        let (store, type_store) = create_test_store().await;
+        create_test_types(&type_store).await;
+
+        // Create entity without classifications
+        let entity = Entity::new("Table").with_attribute("name", json!("users"));
+        let guid = store.create_entity(&entity).await.unwrap();
+
+        // Verify no classifications initially
+        let classifications = store.get_classifications(&guid).await.unwrap();
+        assert!(classifications.is_empty());
+
+        // Add classification
+        let classification = Classification::new("PII").with_propagate(true);
+        store
+            .add_classifications(&guid, std::slice::from_ref(&classification))
+            .await
+            .unwrap();
+
+        // Verify classification was added
+        let classifications = store.get_classifications(&guid).await.unwrap();
+        assert_eq!(classifications.len(), 1);
+        assert_eq!(classifications[0].type_name, "PII");
+
+        // Add duplicate classification (should be ignored)
+        store
+            .add_classifications(&guid, &[classification])
+            .await
+            .unwrap();
+
+        let classifications = store.get_classifications(&guid).await.unwrap();
+        assert_eq!(classifications.len(), 1); // Still only 1
+    }
+
+    #[tokio::test]
+    async fn test_update_classifications() {
+        let (store, type_store) = create_test_store().await;
+        create_test_types(&type_store).await;
+
+        // Create entity
+        let entity = Entity::new("Table").with_attribute("name", json!("users"));
+        let guid = store.create_entity(&entity).await.unwrap();
+
+        // Add initial classification
+        let classification1 = Classification::new("PII");
+        store
+            .add_classifications(&guid, &[classification1])
+            .await
+            .unwrap();
+
+        // Update with different classifications
+        let classification2 = Classification::new("SENSITIVE");
+        let classification3 = Classification::new("CONFIDENTIAL");
+        store
+            .update_classifications(&guid, &[classification2, classification3])
+            .await
+            .unwrap();
+
+        // Verify classifications were replaced
+        let classifications = store.get_classifications(&guid).await.unwrap();
+        assert_eq!(classifications.len(), 2);
+        let names: Vec<&str> = classifications
+            .iter()
+            .map(|c| c.type_name.as_str())
+            .collect();
+        assert!(names.contains(&"SENSITIVE"));
+        assert!(names.contains(&"CONFIDENTIAL"));
+        assert!(!names.contains(&"PII")); // Old one should be gone
+    }
+
+    #[tokio::test]
+    async fn test_remove_classification() {
+        let (store, type_store) = create_test_store().await;
+        create_test_types(&type_store).await;
+
+        // Create entity with classifications
+        let classification1 = Classification::new("PII");
+        let classification2 = Classification::new("SENSITIVE");
+        let entity = Entity::new("Table")
+            .with_attribute("name", json!("users"))
+            .with_classification(classification1)
+            .with_classification(classification2);
+        let guid = store.create_entity(&entity).await.unwrap();
+
+        // Verify initial classifications
+        let classifications = store.get_classifications(&guid).await.unwrap();
+        assert_eq!(classifications.len(), 2);
+
+        // Remove one classification
+        store.remove_classification(&guid, "PII").await.unwrap();
+
+        // Verify classification was removed
+        let classifications = store.get_classifications(&guid).await.unwrap();
+        assert_eq!(classifications.len(), 1);
+        assert_eq!(classifications[0].type_name, "SENSITIVE");
+
+        // Remove non-existent classification (should succeed silently)
+        store
+            .remove_classification(&guid, "NONEXISTENT")
+            .await
+            .unwrap();
+
+        // Verify nothing changed
+        let classifications = store.get_classifications(&guid).await.unwrap();
+        assert_eq!(classifications.len(), 1);
     }
 }

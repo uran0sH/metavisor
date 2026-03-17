@@ -295,6 +295,34 @@ pub trait MetavisorStore: Send + Sync {
     /// Get all classifications for an entity (direct + propagated)
     async fn get_all_classifications(&self, entity_guid: &str) -> Result<Vec<Classification>>;
 
+    // ========================================================================
+    // Classification Operations
+    // ========================================================================
+
+    /// Add classifications to an entity
+    async fn add_classifications(
+        &self,
+        entity_guid: &str,
+        classifications: &[Classification],
+    ) -> Result<()>;
+
+    /// Get classifications for an entity (direct only, not propagated)
+    async fn get_classifications(&self, entity_guid: &str) -> Result<Vec<Classification>>;
+
+    /// Update classifications for an entity (replaces all)
+    async fn update_classifications(
+        &self,
+        entity_guid: &str,
+        classifications: &[Classification],
+    ) -> Result<()>;
+
+    /// Remove a specific classification from an entity by name
+    async fn remove_classification(
+        &self,
+        entity_guid: &str,
+        classification_name: &str,
+    ) -> Result<()>;
+
     /// Get immediate neighbors
     async fn get_neighbors(
         &self,

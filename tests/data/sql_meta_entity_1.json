@@ -1,0 +1,15 @@
+{
+  "entity": {
+    "typeName": "sql_meta", 
+    "attributes": {
+      "qualifiedName": "397dd24490e1020c8cc869276d1be0c5",
+      "name": "sql_397dd24490e1020c8cc869276d1be0c5",
+      "sql_id": "397dd24490e1020c8cc869276d1be0c5",
+      "table_id": "110000000520363", 
+      "sql": "SELECT t1.PARTY_ID FROM BDSP_SPCP.T80_PC8_CPS_PBK AS t1 WHERE t1.PT_DT = '2025-08-01' AND t1.CRT_DATE >= '2025-07-01' AND t1.CRT_DATE <= '2025-07-31' AND t1.SIGN_FLAG = '1';",
+      "sql_description": "{'intent': '查询2025年7月新增签约私人银行客户的客户编号清单', 'data_source': 'BDSP_SPCP.T80_PC8_CPS_PBK（个人画像私人银行标志表）', 'time_window': '签约日期范围：2025年7月1日至2025年7月31日', 'filters': \"分区日期为2025年8月1日，签约标志为'1'（表示已签约）\", 'output': '客户唯一标识列表', 'business_purpose': '统计当月新增签约客户数量及客户明细，为个人金融业务和私人银行业务的客户管理、资源分配及业务考核提供数据支持'}",
+      "query": "查询2025年7月新增签约私人银行客户的客户号清单，要求签约状态为已签约且数据分区日期为2025年8月1日",
+      "columns": "BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID,BDSP_SPCP.T80_PC8_CPS_PBK.PT_DT,BDSP_SPCP.T80_PC8_CPS_PBK.CRT_DATE,BDSP_SPCP.T80_PC8_CPS_PBK.SIGN_FLAG"
+    }
+  }
+}

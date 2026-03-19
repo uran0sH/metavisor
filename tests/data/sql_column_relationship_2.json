@@ -1,0 +1,12 @@
+{
+  "typeName": "sql_uses_column",
+  "attributes": {},
+  "end1": {
+    "typeName": "sql_meta",
+    "uniqueAttributes": {"qualifiedName": "397dd24490e1020c8cc869276d1be0c5"}
+  },
+  "end2": {
+    "typeName": "column_meta",
+    "uniqueAttributes": {"qualifiedName": "BDSP_SPCP.T80_PC8_CPS_ASSET_AVG_Y.CUST_ID"}
+  }
+}

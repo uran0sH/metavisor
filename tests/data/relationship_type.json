@@ -1,0 +1,72 @@
+{
+  "relationshipDefs": [
+    {
+      "name": "join_relationship",
+      "serviceType": "atlas",
+      "typeVersion": "1.0",
+      "relationshipCategory": "ASSOCIATION",
+      "relationshipLabel": "join",
+      "attributeDefs": [
+        {
+          "name": "rel_type",
+          "typeName": "string",
+          "isOptional": false,
+          "cardinality": "SINGLE"
+        },
+        {
+          "name": "expression",
+          "typeName": "string",
+          "isOptional": false,
+          "cardinality": "SINGLE"
+        },
+        {
+          "name": "rel_evidence",
+          "typeName": "string",
+          "isOptional": true,
+          "cardinality": "SINGLE"
+        },
+        {
+          "name": "target_columns",
+          "typeName": "array<string>",
+          "isOptional": true,
+          "cardinality": "SET"
+        }
+      ],
+      "endDef1": {
+        "type": "column_meta",
+        "name": "source_column",
+        "isContainer": false,
+        "cardinality": "SINGLE",
+        "isLegacyAttribute": false
+      },
+      "endDef2": {
+        "type": "column_meta", 
+        "name": "target_column",
+        "isContainer": false,
+        "cardinality": "SINGLE",
+        "isLegacyAttribute": false
+      }
+    },
+    {
+      "name": "sql_uses_column",
+      "serviceType": "atlas", 
+      "typeVersion": "1.0",
+      "relationshipCategory": "ASSOCIATION",
+      "relationshipLabel": "uses",
+      "endDef1": {
+        "type": "sql_meta",
+        "name": "sql_queries",
+        "isContainer": false,
+        "cardinality": "SET",
+        "isLegacyAttribute": false
+      },
+      "endDef2": {
+        "type": "column_meta",
+        "name": "used_columns", 
+        "isContainer": false,
+        "cardinality": "SET",
+        "isLegacyAttribute": false
+      }
+    }
+  ]
+}

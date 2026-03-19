@@ -1,0 +1,6 @@
+{
+  "query": "join_relationship where end2.uniqueAttributes.qualifiedName = 'BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID'",
+  "typeName": "join_relationship",
+  "limit": 50,
+  "offset": 0
+}

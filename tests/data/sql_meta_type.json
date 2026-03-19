@@ -1,0 +1,49 @@
+{
+  "entityDefs": [
+    {
+      "name": "sql_meta",
+      "superTypes": ["Process"],
+      "serviceType": "atlas",
+      "typeVersion": "1.0", 
+      "attributeDefs": [
+        {
+          "name": "sql_id",
+          "typeName": "string",
+          "isOptional": false,
+          "cardinality": "SINGLE",
+          "isUnique": true
+        },
+        {
+          "name": "table_id",
+          "typeName": "string",
+          "isOptional": false,
+          "cardinality": "SINGLE"
+        },
+        {
+          "name": "sql",
+          "typeName": "string",
+          "isOptional": false,
+          "cardinality": "SINGLE"
+        },
+        {
+          "name": "sql_description",
+          "typeName": "string",
+          "isOptional": true,
+          "cardinality": "SINGLE"
+        },
+        {
+          "name": "query",
+          "typeName": "string",
+          "isOptional": true,
+          "cardinality": "SINGLE"
+        },
+        {
+          "name": "columns",
+          "typeName": "string",
+          "isOptional": true,
+          "cardinality": "SINGLE"
+        }
+      ]
+    }
+  ]
+}

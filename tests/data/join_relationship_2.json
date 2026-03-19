@@ -1,0 +1,17 @@
+{
+  "typeName": "join_relationship",
+  "attributes": {
+    "rel_type": "join",
+    "expression": "BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID = BDSP_SPCP.T80_PC8_CPS_ASSET_AVG_Y.CUST_ID",
+    "rel_evidence": "私人银行客户表通过PARTY_ID与资产表CUST_ID关联",
+    "target_columns": ["BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID"]
+  },
+  "end1": {
+    "typeName": "column_meta",
+    "uniqueAttributes": {"qualifiedName": "BDSP_SPCP.T80_PC8_CPS_ASSET_AVG_Y.CUST_ID"}
+  },
+  "end2": {
+    "typeName": "column_meta",
+    "uniqueAttributes": {"qualifiedName": "BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID"}
+  }
+}

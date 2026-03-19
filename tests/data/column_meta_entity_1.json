@@ -1,0 +1,20 @@
+{
+  "entity": {
+    "typeName": "column_meta",
+    "attributes": {
+      "qualifiedName": "BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID",
+      "name": "PARTY_ID",
+      "column_id": "BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID",
+      "column_name": "PARTY_ID",
+      "table_name": "T80_PC8_CPS_PBK",
+      "db_name": "BDSP_SPCP",
+      "table_id": "110000000520363",
+      "table_description": "个人画像私人银行标志",
+      "raw_column_description": "客户号",
+      "column_description_short": "客户编号：客户唯一标识",
+      "column_description": "列英文名: BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID。表英文名：T80_PC8_CPS_PBK。表中文名：个人画像私人银行标志表。列描述：客户唯一标识。在SQL中作为select字段输出，用于标识私人银行签约客户。值信息：{\"data_type\": \"未知\", \"nullable\": \"未知\", \"role\": \"select\", \"business_meaning\": \"客户编号\", \"key_type\": \"主键或唯一标识\", \"usage_context\": \"输出新增签约客户的唯一识别码\"}",
+      "value_info": "{\"nullable\": true, \"data_type\": \"VARCHAR\", \"enum_values\": [{\"value\": \"1\", \"description\": \"正常\"}, {\"value\": \"2\", \"description\": \"明留暗收\"}, {\"value\": \"3\", \"description\": \"撤销\"}]}",
+      "relationship": "[{\"src\": \"BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID\", \"rel_type\": \"join\", \"expression\": \"BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID = BDSP_SPCP.T80_PC8_CPS_ASSET_AVG_Y.CUST_ID\", \"target_column\": [\"BDSP_SPCP.T80_PC8_CPS_ASSET_AVG_Y.CUST_ID\"], \"rel_evidence\": \"私人银行客户表通过PARTY_ID与资产表CUST_ID关联\"}]"
+    }
+  }
+}

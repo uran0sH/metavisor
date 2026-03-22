@@ -7,9 +7,10 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use metavisor_core::{
-    Classification, Entity, EntityHeader, EntityStore, GraphStats, GraphStore, LineageNode,
-    LineageQueryOptions, LineageResult, MetavisorStore, PropagateTags, Relationship,
-    RelationshipHeader, RelationshipStore, Result, TraversalDirection, TypeDef, TypeStore,
+    Classification, Entity, EntityDef, EntityHeader, EntityStore, GraphStats, GraphStore,
+    LineageNode, LineageQueryOptions, LineageResult, MetavisorStore, ObjectId, PropagateTags,
+    Relationship, RelationshipDef, RelationshipEndDef, RelationshipHeader, RelationshipStore,
+    Result, TraversalDirection, TypeDef, TypeStore,
 };
 
 /// DefaultMetavisorStore - Default implementation of MetavisorStore
@@ -70,6 +71,173 @@ impl DefaultMetavisorStore {
 
         Ok(())
     }
+
+    async fn ensure_lineage_relationship_types(&self, process_type: &str) -> Result<()> {
+        let process_entity_type = match self.type_store.get_type(process_type).await? {
+            TypeDef::Entity(def) => def,
+            _ => {
+                return Err(metavisor_core::CoreError::Validation(format!(
+                    "Type '{}' is not an entity type",
+                    process_type
+                )))
+            }
+        };
+
+        let input_type = self
+            .extract_lineage_endpoint_type(&process_entity_type, "inputs")
+            .unwrap_or_else(|| "column_meta".to_string());
+        let output_type = self
+            .extract_lineage_endpoint_type(&process_entity_type, "outputs")
+            .unwrap_or_else(|| "column_meta".to_string());
+
+        self.ensure_relationship_type_exists(
+            RelationshipDef::new("process_inputs")
+                .end1(
+                    RelationshipEndDef::new(&input_type, "input")
+                        .cardinality(metavisor_core::Cardinality::Set),
+                )
+                .end2(
+                    RelationshipEndDef::new(process_type, "process")
+                        .cardinality(metavisor_core::Cardinality::Single),
+                ),
+        )
+        .await?;
+
+        self.ensure_relationship_type_exists(
+            RelationshipDef::new("process_outputs")
+                .end1(
+                    RelationshipEndDef::new(process_type, "process")
+                        .cardinality(metavisor_core::Cardinality::Single),
+                )
+                .end2(
+                    RelationshipEndDef::new(&output_type, "output")
+                        .cardinality(metavisor_core::Cardinality::Set),
+                ),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn ensure_relationship_type_exists(
+        &self,
+        relationship_def: RelationshipDef,
+    ) -> Result<()> {
+        let type_name = relationship_def.name.clone();
+        if self.type_store.type_exists(&type_name).await? {
+            return Ok(());
+        }
+        self.type_store
+            .create_type(&TypeDef::Relationship(relationship_def))
+            .await
+    }
+
+    fn extract_lineage_endpoint_type(
+        &self,
+        entity_def: &EntityDef,
+        attr_name: &str,
+    ) -> Option<String> {
+        entity_def
+            .attribute_defs
+            .iter()
+            .find(|attr| attr.name == attr_name)
+            .and_then(|attr| Self::parse_array_object_type(&attr.type_name))
+    }
+
+    fn parse_array_object_type(type_name: &str) -> Option<String> {
+        let inner = type_name
+            .strip_prefix("array<")
+            .and_then(|s| s.strip_suffix('>'))?;
+        inner
+            .strip_prefix("objectid<")
+            .and_then(|s| s.strip_suffix('>'))
+            .map(ToString::to_string)
+    }
+
+    fn parse_object_ids(value: Option<&serde_json::Value>) -> Vec<ObjectId> {
+        value
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| serde_json::from_value::<ObjectId>(item.clone()).ok())
+            .collect()
+    }
+
+    async fn create_lineage_relationships_for_entity(
+        &self,
+        entity: &Entity,
+        entity_guid: &str,
+    ) -> Result<()> {
+        let inputs = Self::parse_object_ids(entity.attributes.get("inputs"));
+        let outputs = Self::parse_object_ids(entity.attributes.get("outputs"));
+
+        if inputs.is_empty() && outputs.is_empty() {
+            return Ok(());
+        }
+
+        self.ensure_lineage_relationship_types(&entity.type_name)
+            .await?;
+
+        let mut created_relationship_guids = Vec::new();
+
+        for input in inputs {
+            let relationship = Relationship::new("process_inputs")
+                .with_end1(self.resolve_object_id(input).await?)
+                .with_end2(ObjectId::by_guid(&entity.type_name, entity_guid))
+                .with_propagate_tags(PropagateTags::OneToTwo);
+            match self.create_relationship(&relationship).await {
+                Ok(guid) => created_relationship_guids.push(guid),
+                Err(err) => {
+                    self.rollback_created_relationships(&created_relationship_guids)
+                        .await;
+                    return Err(err);
+                }
+            }
+        }
+
+        for output in outputs {
+            let relationship = Relationship::new("process_outputs")
+                .with_end1(ObjectId::by_guid(&entity.type_name, entity_guid))
+                .with_end2(self.resolve_object_id(output).await?)
+                .with_propagate_tags(PropagateTags::OneToTwo);
+            match self.create_relationship(&relationship).await {
+                Ok(guid) => created_relationship_guids.push(guid),
+                Err(err) => {
+                    self.rollback_created_relationships(&created_relationship_guids)
+                        .await;
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn rollback_created_relationships(&self, relationship_guids: &[String]) {
+        for guid in relationship_guids.iter().rev() {
+            let _ = self.delete_relationship(guid).await;
+        }
+    }
+
+    async fn resolve_object_id(&self, object_id: ObjectId) -> Result<ObjectId> {
+        if object_id.guid.is_some() {
+            return Ok(object_id);
+        }
+
+        let entity = self
+            .entity_store
+            .get_entity_by_unique_attrs(&object_id.type_name, &object_id.unique_attributes)
+            .await?;
+
+        let guid = entity.guid.ok_or_else(|| {
+            metavisor_core::CoreError::Validation(format!(
+                "Entity '{}' resolved from unique attributes has no GUID",
+                object_id.type_name
+            ))
+        })?;
+
+        Ok(ObjectId::by_guid(object_id.type_name, guid))
+    }
 }
 
 #[async_trait]
@@ -118,6 +286,18 @@ impl MetavisorStore for DefaultMetavisorStore {
             .await
         {
             // Rollback: delete the entity we just created
+            let _ = self.entity_store.delete_entity(&guid).await;
+            return Err(e);
+        }
+
+        let mut created_entity = entity.clone();
+        created_entity.guid = Some(guid.clone());
+
+        if let Err(e) = self
+            .create_lineage_relationships_for_entity(&created_entity, &guid)
+            .await
+        {
+            let _ = self.graph_store.remove_entity_node(&guid).await;
             let _ = self.entity_store.delete_entity(&guid).await;
             return Err(e);
         }
@@ -215,40 +395,51 @@ impl MetavisorStore for DefaultMetavisorStore {
     // ========================================================================
 
     async fn create_relationship(&self, relationship: &Relationship) -> Result<String> {
+        let mut resolved_relationship = relationship.clone();
+        if let Some(end1) = resolved_relationship.end1.take() {
+            resolved_relationship.end1 = Some(self.resolve_object_id(end1).await?);
+        }
+        if let Some(end2) = resolved_relationship.end2.take() {
+            resolved_relationship.end2 = Some(self.resolve_object_id(end2).await?);
+        }
+
         // Step 1: Create relationship in KV store
         let guid = self
             .relationship_store
-            .create_relationship(relationship)
+            .create_relationship(&resolved_relationship)
             .await?;
 
         // Step 2: Add edge to graph
-        let (end1_guid, end2_guid) = match (&relationship.end1, &relationship.end2) {
-            (Some(e1), Some(e2)) => match (&e1.guid, &e2.guid) {
-                (Some(g1), Some(g2)) => (g1.clone(), g2.clone()),
+        let (end1_guid, end2_guid) =
+            match (&resolved_relationship.end1, &resolved_relationship.end2) {
+                (Some(e1), Some(e2)) => match (&e1.guid, &e2.guid) {
+                    (Some(g1), Some(g2)) => (g1.clone(), g2.clone()),
+                    _ => {
+                        // Missing GUIDs - rollback
+                        let _ = self.relationship_store.delete_relationship(&guid).await;
+                        return Err(metavisor_core::CoreError::Validation(
+                            "Relationship endpoints must have GUIDs".to_string(),
+                        ));
+                    }
+                },
                 _ => {
-                    // Missing GUIDs - rollback
+                    // Missing endpoints - rollback
                     let _ = self.relationship_store.delete_relationship(&guid).await;
                     return Err(metavisor_core::CoreError::Validation(
-                        "Relationship endpoints must have GUIDs".to_string(),
+                        "Relationship must have both endpoints".to_string(),
                     ));
                 }
-            },
-            _ => {
-                // Missing endpoints - rollback
-                let _ = self.relationship_store.delete_relationship(&guid).await;
-                return Err(metavisor_core::CoreError::Validation(
-                    "Relationship must have both endpoints".to_string(),
-                ));
-            }
-        };
+            };
 
-        let propagate_tags = relationship.propagate_tags.unwrap_or(PropagateTags::None);
+        let propagate_tags = resolved_relationship
+            .propagate_tags
+            .unwrap_or(PropagateTags::None);
 
         if let Err(e) = self
             .graph_store
             .add_relationship_edge(
                 &guid,
-                &relationship.type_name,
+                &resolved_relationship.type_name,
                 &end1_guid,
                 &end2_guid,
                 propagate_tags,

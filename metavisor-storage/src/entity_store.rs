@@ -157,13 +157,34 @@ impl EntityStore for KvEntityStore {
     async fn get_entity_by_unique_attrs(
         &self,
         type_name: &str,
-        _unique_attrs: &HashMap<String, serde_json::Value>,
+        unique_attrs: &HashMap<String, serde_json::Value>,
     ) -> Result<Entity> {
-        // TODO: Implement unique attribute lookup with secondary index
-        // For now, return an error indicating this is not yet supported
-        Err(CoreError::Validation(format!(
-            "Lookup by unique attributes is not yet supported for type '{}'",
-            type_name
+        if unique_attrs.is_empty() {
+            return Err(CoreError::Validation(format!(
+                "At least one unique attribute is required for type '{}'",
+                type_name
+            )));
+        }
+
+        let entities = self.list_entities_by_type(type_name).await?;
+        for header in entities {
+            let Some(guid) = header.guid else {
+                continue;
+            };
+
+            let entity = self.get_entity(&guid).await?;
+            let matches = unique_attrs
+                .iter()
+                .all(|(key, expected)| entity.attributes.get(key) == Some(expected));
+
+            if matches {
+                return Ok(entity);
+            }
+        }
+
+        Err(CoreError::EntityNotFound(format!(
+            "{} with unique attributes {:?}",
+            type_name, unique_attrs
         )))
     }
 
@@ -233,16 +254,32 @@ impl EntityStore for KvEntityStore {
             .map_err(|e| CoreError::Storage(e.to_string()))
     }
 
-    async fn list_entities_by_type(&self, _type_name: &str) -> Result<Vec<EntityHeader>> {
-        // TODO: Implement prefix scan for type index
-        // For now, return empty list
-        Ok(Vec::new())
+    async fn list_entities_by_type(&self, type_name: &str) -> Result<Vec<EntityHeader>> {
+        let prefix = format!("entity_type:{type_name}:");
+        let mut entries: Vec<(Vec<u8>, EntityHeader)> = self
+            .kv
+            .scan_prefix(prefix.as_bytes())
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
+
+        let mut headers: Vec<EntityHeader> = entries.drain(..).map(|(_, header)| header).collect();
+        headers.sort_by(|a, b| a.guid.cmp(&b.guid));
+        Ok(headers)
     }
 
     async fn list_entities(&self) -> Result<Vec<EntityHeader>> {
-        // TODO: Implement prefix scan for all entities
-        // For now, return empty list
-        Ok(Vec::new())
+        const ENTITY_PREFIX: &[u8] = b"entity:";
+
+        let mut entries: Vec<(Vec<u8>, Entity)> = self
+            .kv
+            .scan_prefix(ENTITY_PREFIX)
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
+
+        let mut headers: Vec<EntityHeader> = entries
+            .drain(..)
+            .map(|(_, entity)| entity.to_header())
+            .collect();
+        headers.sort_by(|a, b| a.guid.cmp(&b.guid));
+        Ok(headers)
     }
 }
 

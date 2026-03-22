@@ -3,15 +3,16 @@
 //! Based on: https://github.com/apache/atlas/blob/master/intg/src/main/java/org/apache/atlas/model/instance/
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use metavisor_core::{
-    EntitiesWithExtInfo, Entity, EntityHeader, EntityWithExtInfo, MetavisorStore,
-};
+use metavisor_core::{EntitiesWithExtInfo, Entity, EntityHeader, EntityRequest, MetavisorStore};
 
 use crate::error::Result;
 
@@ -21,20 +22,69 @@ pub struct EntityAppState {
     pub store: Arc<dyn MetavisorStore>,
 }
 
+#[derive(Serialize)]
+pub struct EntityApiResponse {
+    #[serde(flatten)]
+    entity_flat: Entity,
+    entity: Entity,
+    #[serde(rename = "referredEntities", skip_serializing_if = "HashMap::is_empty")]
+    referred_entities: HashMap<String, Entity>,
+}
+
+impl EntityApiResponse {
+    fn new(entity: Entity, referred_entities: HashMap<String, Entity>) -> Self {
+        Self {
+            entity_flat: entity.clone(),
+            entity,
+            referred_entities,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum EntityPayload {
+    Wrapped(EntityRequest),
+    Plain(Entity),
+}
+
+impl EntityPayload {
+    fn into_entity(self) -> Entity {
+        match self {
+            Self::Wrapped(request) => request.entity,
+            Self::Plain(entity) => entity,
+        }
+    }
+}
+
 /// Create a single entity
 ///
 /// POST /v2/entity
+///
+/// Request body (Atlas API v2 compatible):
+/// ```json
+/// {
+///   "entity": {
+///     "typeName": "column_meta",
+///     "attributes": {...}
+///   }
+/// }
+/// ```
 pub async fn create_entity(
     State(state): State<EntityAppState>,
-    Json(entity): Json<Entity>,
-) -> Result<(StatusCode, Json<EntityWithExtInfo>)> {
+    Json(payload): Json<EntityPayload>,
+) -> Result<(StatusCode, Json<EntityApiResponse>)> {
+    let entity = payload.into_entity();
     let guid = state.store.create_entity(&entity).await?;
 
     // Return the created entity with the generated GUID
     let mut created = entity;
     created.guid = Some(guid);
 
-    Ok((StatusCode::CREATED, Json(EntityWithExtInfo::new(created))))
+    Ok((
+        StatusCode::CREATED,
+        Json(EntityApiResponse::new(created, HashMap::new())),
+    ))
 }
 
 /// Create multiple entities
@@ -62,20 +112,32 @@ pub async fn create_entities(
 pub async fn get_entity_by_guid(
     State(state): State<EntityAppState>,
     Path(guid): Path<String>,
-) -> Result<Json<EntityWithExtInfo>> {
+) -> Result<Json<EntityApiResponse>> {
     let entity = state.store.get_entity(&guid).await?;
-    Ok(Json(EntityWithExtInfo::new(entity)))
+    Ok(Json(EntityApiResponse::new(entity, HashMap::new())))
 }
 
 /// Update entity
 ///
 /// PUT /v2/entity
+///
+/// Request body (Atlas API v2 compatible):
+/// ```json
+/// {
+///   "entity": {
+///     "guid": "...",
+///     "typeName": "column_meta",
+///     "attributes": {...}
+///   }
+/// }
+/// ```
 pub async fn update_entity(
     State(state): State<EntityAppState>,
-    Json(entity): Json<Entity>,
-) -> Result<Json<EntityWithExtInfo>> {
+    Json(payload): Json<EntityPayload>,
+) -> Result<Json<EntityApiResponse>> {
+    let entity = payload.into_entity();
     state.store.update_entity(&entity).await?;
-    Ok(Json(EntityWithExtInfo::new(entity)))
+    Ok(Json(EntityApiResponse::new(entity, HashMap::new())))
 }
 
 /// Delete entity by GUID
@@ -98,4 +160,46 @@ pub async fn list_entity_headers(
 ) -> Result<Json<Vec<EntityHeader>>> {
     let headers = state.store.list_entities().await?;
     Ok(Json(headers))
+}
+
+/// Query parameters for uniqueAttribute lookup
+///
+/// Supports query parameters like `attr:qualifiedName=value`
+#[derive(Debug, Deserialize)]
+pub struct UniqueAttributeQueryParams {
+    /// Dynamic attribute filters (e.g., attr:qualifiedName)
+    #[serde(flatten)]
+    pub attrs: HashMap<String, serde_json::Value>,
+}
+
+/// Get entity by type name and unique attributes
+///
+/// GET /api/metavisor/v1/entity/uniqueAttribute/type/{type}?attr:qualifiedName=value
+pub async fn get_entity_by_unique_attribute(
+    State(state): State<EntityAppState>,
+    Path(type_name): Path<String>,
+    Query(params): Query<UniqueAttributeQueryParams>,
+) -> Result<Json<EntityApiResponse>> {
+    // Extract attribute filters from query params (skip internal params)
+    let mut unique_attrs = HashMap::new();
+
+    for (key, value) in &params.attrs {
+        // Handle "attr:" prefix for attribute names
+        if let Some(attr_name) = key.strip_prefix("attr:") {
+            // Convert value to string if it's a string, otherwise use as-is
+            let attr_value = if let Some(s) = value.as_str() {
+                serde_json::Value::String(s.to_string())
+            } else {
+                value.clone()
+            };
+            unique_attrs.insert(attr_name.to_string(), attr_value);
+        }
+    }
+
+    let entity = state
+        .store
+        .get_entity_by_unique_attrs(&type_name, &unique_attrs)
+        .await?;
+
+    Ok(Json(EntityApiResponse::new(entity, HashMap::new())))
 }

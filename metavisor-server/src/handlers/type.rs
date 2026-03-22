@@ -55,26 +55,23 @@ pub async fn list_type_headers(
 pub async fn get_type_by_name(
     State(state): State<MetavisorAppState>,
     Path(name): Path<String>,
-) -> Result<Json<TypesDef>> {
+) -> Result<Json<TypeDef>> {
     let type_def = state.store.get_type(&name).await?;
-
-    let mut result = TypesDef::new();
-    add_type_to_result(&mut result, type_def);
-
-    Ok(Json(result))
+    Ok(Json(type_def))
 }
 
 /// Get type by GUID
 pub async fn get_type_by_guid(
     State(state): State<MetavisorAppState>,
     Path(guid): Path<String>,
-) -> Result<Json<TypesDef>> {
+) -> Result<Json<TypeDef>> {
     // GUID is derived from name, so we need to list all types and find matching GUID
     let type_names = state.store.list_types().await?;
 
     for name in type_names {
         if generate_guid(&name) == guid {
-            return get_type_by_name(State(state), Path(name)).await;
+            let type_def = state.store.get_type(&name).await?;
+            return Ok(Json(type_def));
         }
     }
 
@@ -268,4 +265,80 @@ fn add_type_to_result(result: &mut TypesDef, type_def: TypeDef) {
             result.business_metadata_defs.push(def);
         }
     }
+}
+
+/// Delete type by name
+///
+/// DELETE /api/metavisor/v1/types/typedef/name/{name}
+pub async fn delete_type_by_name(
+    State(state): State<MetavisorAppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode> {
+    state.store.delete_type(&name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Get relationship type by name
+///
+/// GET /api/metavisor/v1/types/relationshipdef/name/{name}
+pub async fn get_relationship_def_by_name(
+    State(state): State<MetavisorAppState>,
+    Path(name): Path<String>,
+) -> Result<Json<TypeDef>> {
+    let type_def = state.store.get_type(&name).await?;
+
+    // Verify it's a relationship type
+    match &type_def {
+        TypeDef::Relationship(_) => {}
+        _ => {
+            return Err(crate::error::ApiError::NotFound(format!(
+                "Type '{}' is not a relationship type",
+                name
+            )));
+        }
+    }
+
+    Ok(Json(type_def))
+}
+
+/// List all relationship type definitions
+///
+/// GET /api/metavisor/v1/types/relationshipdefs
+pub async fn list_relationship_defs(
+    State(state): State<MetavisorAppState>,
+) -> Result<Json<TypesDef>> {
+    let type_names = state.store.list_types().await?;
+
+    let mut result = TypesDef::new();
+
+    for name in type_names {
+        if let Ok(TypeDef::Relationship(def)) = state.store.get_type(&name).await {
+            result.relationship_defs.push(def);
+        }
+    }
+
+    Ok(Json(result))
+}
+
+/// Delete relationship type by name
+///
+/// DELETE /api/metavisor/v1/types/relationshipdef/name/{name}
+pub async fn delete_relationship_def_by_name(
+    State(state): State<MetavisorAppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode> {
+    // Verify it's a relationship type first
+    let type_def = state.store.get_type(&name).await?;
+    match &type_def {
+        TypeDef::Relationship(_) => {}
+        _ => {
+            return Err(crate::error::ApiError::NotFound(format!(
+                "Type '{}' is not a relationship type",
+                name
+            )));
+        }
+    }
+
+    state.store.delete_type(&name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

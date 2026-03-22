@@ -8,6 +8,8 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use metavisor_core::{
@@ -173,4 +175,107 @@ pub async fn get_graph_stats(State(state): State<GraphAppState>) -> Result<Json<
 pub struct GraphStats {
     pub node_count: usize,
     pub edge_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LineageLookupResponse {
+    pub guid: String,
+    #[serde(flatten)]
+    pub lineage: LineageResult,
+}
+
+/// Query parameters for uniqueAttribute lineage lookup
+#[derive(Debug, Deserialize)]
+pub struct UniqueAttributeQueryParams {
+    /// Dynamic attribute filters (e.g., attr:qualifiedName)
+    #[serde(flatten)]
+    pub attrs: HashMap<String, serde_json::Value>,
+
+    /// Direction: INPUT, OUTPUT, or BOTH (default: BOTH)
+    #[serde(default)]
+    pub direction: Option<String>,
+
+    /// Maximum depth to traverse (default: 3)
+    #[serde(default = "default_depth")]
+    pub depth: usize,
+
+    /// Filter by relationship types (comma-separated)
+    pub relationship_types: Option<String>,
+
+    /// Filter by entity types (comma-separated)
+    pub entity_types: Option<String>,
+
+    /// Include propagated classifications
+    #[serde(default = "default_true")]
+    pub include_propagated_classifications: bool,
+}
+
+/// Get lineage by type name and unique attributes
+///
+/// GET /api/metavisor/v1/lineage/uniqueAttribute/type/{type}?attr:qualifiedName=value&direction=BOTH
+pub async fn get_lineage_by_unique_attribute(
+    State(state): State<GraphAppState>,
+    Path(type_name): Path<String>,
+    Query(params): Query<UniqueAttributeQueryParams>,
+) -> Result<Json<LineageLookupResponse>> {
+    // Extract attribute filters from query params
+    let mut unique_attrs = HashMap::new();
+
+    for (key, value) in &params.attrs {
+        if let Some(attr_name) = key.strip_prefix("attr:") {
+            let attr_value = if let Some(s) = value.as_str() {
+                serde_json::Value::String(s.to_string())
+            } else {
+                value.clone()
+            };
+            unique_attrs.insert(attr_name.to_string(), attr_value);
+        }
+    }
+
+    // First get the entity to get its GUID
+    let entity = state
+        .store
+        .get_entity_by_unique_attrs(&type_name, &unique_attrs)
+        .await?;
+
+    let guid = entity
+        .guid
+        .ok_or_else(|| crate::error::ApiError::NotFound("Entity has no GUID".to_string()))?;
+
+    // Build lineage query options
+    let mut options = LineageQueryOptions::new()
+        .with_depth(params.depth)
+        .with_propagated_classifications(params.include_propagated_classifications);
+
+    if let Some(types) = &params.relationship_types {
+        let types: Vec<String> = types.split(',').map(|s| s.trim().to_string()).collect();
+        if !types.is_empty() {
+            options = options.with_relationship_types(types);
+        }
+    }
+
+    if let Some(types) = &params.entity_types {
+        let types: Vec<String> = types.split(',').map(|s| s.trim().to_string()).collect();
+        if !types.is_empty() {
+            options = options.with_entity_types(types);
+        }
+    }
+
+    // Parse direction
+    let direction = params
+        .direction
+        .as_ref()
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(TraversalDirection::Both);
+
+    let result = state.store.get_lineage(&guid, direction, options).await?;
+
+    // Return result with the entity GUID included
+    Ok(Json(LineageLookupResponse {
+        guid: guid.clone(),
+        lineage: LineageResult {
+            root_guid: guid,
+            ..result
+        },
+    }))
 }

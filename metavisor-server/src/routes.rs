@@ -9,14 +9,17 @@ use std::sync::Arc;
 use metavisor_core::MetavisorStore;
 
 use crate::handlers::{
-    add_classifications, create_entities, create_entity, create_relationship, create_types,
-    delete_entity_by_guid, delete_relationship_by_guid, delete_types, get_all_classifications,
-    get_all_types, get_classifications, get_entity_by_guid, get_graph_stats, get_input_lineage,
-    get_lineage_graph, get_output_lineage, get_relationship_by_guid, get_type_by_guid,
-    get_type_by_name, list_relationships_by_entity, list_relationships_by_type, list_type_headers,
-    rebuild_graph, remove_classification, update_classifications, update_entity,
-    update_relationship, update_types, ClassificationAppState, EntityAppState, GraphAppState,
-    MetavisorAppState, RelationshipAppState,
+    add_classifications, basic_search, create_entities, create_entity, create_relationship,
+    create_types, delete_entity_by_guid, delete_relationship_by_guid,
+    delete_relationship_def_by_name, delete_type_by_name, delete_types, get_all_classifications,
+    get_all_types, get_classifications, get_entity_by_guid, get_entity_by_unique_attribute,
+    get_graph_stats, get_input_lineage, get_lineage_by_unique_attribute, get_lineage_graph,
+    get_output_lineage, get_relationship_by_guid, get_relationship_def_by_name, get_type_by_guid,
+    get_type_by_name, list_relationship_defs, list_relationships_by_entity,
+    list_relationships_by_type, list_type_headers, rebuild_graph, remove_classification,
+    search_relations, update_classifications, update_entity, update_relationship, update_types,
+    ClassificationAppState, EntityAppState, GraphAppState, MetavisorAppState, RelationshipAppState,
+    SearchAppState,
 };
 use crate::mcp::{McpHttpService, McpState};
 
@@ -36,6 +39,9 @@ pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
         store: store.clone(),
     };
     let classification_state = ClassificationAppState {
+        store: store.clone(),
+    };
+    let search_state = SearchAppState {
         store: store.clone(),
     };
     let mcp_state = McpState { store };
@@ -84,7 +90,23 @@ pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
         )
         .route(
             "/api/metavisor/v1/types/typedef/guid/{guid}",
-            get(get_type_by_guid).with_state(type_state),
+            get(get_type_by_guid).with_state(type_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/types/typedef/name/{name}",
+            delete(delete_type_by_name).with_state(type_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/types/relationshipdef/name/{name}",
+            get(get_relationship_def_by_name).with_state(type_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/types/relationshipdef/name/{name}",
+            delete(delete_relationship_def_by_name).with_state(type_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/types/relationshipdefs",
+            get(list_relationship_defs).with_state(type_state),
         )
         // Entity management
         .route(
@@ -105,7 +127,11 @@ pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
         )
         .route(
             "/api/metavisor/v1/entity/guid/{guid}",
-            delete(delete_entity_by_guid).with_state(entity_state),
+            delete(delete_entity_by_guid).with_state(entity_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/entity/uniqueAttribute/type/{type}",
+            get(get_entity_by_unique_attribute).with_state(entity_state),
         )
         // Relationship management
         .route(
@@ -132,10 +158,23 @@ pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
             "/api/metavisor/v1/relationship/type/{type_name}",
             get(list_relationships_by_type).with_state(relationship_state),
         )
+        // Search
+        .route(
+            "/api/metavisor/v1/search/basic",
+            post(basic_search).with_state(search_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/search/relations",
+            post(search_relations).with_state(search_state),
+        )
         // Lineage endpoints (Atlas-compatible)
         .route(
             "/api/metavisor/v1/lineage/{guid}",
             get(get_lineage_graph).with_state(graph_state.clone()),
+        )
+        .route(
+            "/api/metavisor/v1/lineage/uniqueAttribute/type/{type}",
+            get(get_lineage_by_unique_attribute).with_state(graph_state.clone()),
         )
         // Convenience endpoints for input/output lineage
         .route(

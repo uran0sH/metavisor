@@ -84,6 +84,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -100,13 +103,16 @@ jobs:
 
       - name: Run integration tests
         run: |
+          set -euo pipefail
+
           # Start server in background
           cargo run --bin metavisor -- --port 31000 --data-dir /tmp/metavisor_ci &
           SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
 
           # Wait for server to be ready
           for i in {1..30}; do
-            if curl -s http://localhost:31000/health > /dev/null 2>&1; then
+            if curl -s http://127.0.0.1:31000/health > /dev/null 2>&1; then
               echo "Server is ready"
               break
             fi
@@ -114,11 +120,13 @@ jobs:
             sleep 1
           done
 
-          # Run integration tests
+          # Run Rust integration tests
           cargo test --test type_api_integration
           cargo test --test entity_api_integration
           cargo test --test lineage_api_integration
           cargo test --test mcp_test
 
-          # Cleanup
-          kill $SERVER_PID 2>/dev/null || true
+          # Run Python end-to-end API script
+          cd tests
+          uv run python run_test_data.py --base-url http://127.0.0.1:31000 cleanup
+          uv run python run_test_data.py --base-url http://127.0.0.1:31000 all

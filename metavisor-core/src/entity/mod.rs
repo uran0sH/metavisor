@@ -18,5 +18,5 @@ mod reference;
 pub use classification::{Classification, TimeBoundary};
 pub use common::*;
 pub use header::EntityHeader;
-pub use instance::{EntitiesWithExtInfo, Entity, EntityExtInfo, EntityWithExtInfo};
+pub use instance::{EntitiesWithExtInfo, Entity, EntityExtInfo, EntityRequest, EntityWithExtInfo};
 pub use reference::ObjectId;

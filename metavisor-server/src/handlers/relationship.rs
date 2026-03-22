@@ -7,12 +7,11 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use metavisor_core::{
-    EntityHeader, MetavisorStore, Relationship, RelationshipHeader, RelationshipWithExtInfo,
-};
+use metavisor_core::{EntityHeader, MetavisorStore, Relationship, RelationshipHeader};
 
 use crate::error::Result;
 
@@ -22,22 +21,38 @@ pub struct RelationshipAppState {
     pub store: Arc<dyn MetavisorStore>,
 }
 
+#[derive(Serialize)]
+pub struct RelationshipApiResponse {
+    #[serde(flatten)]
+    relationship_flat: Relationship,
+    relationship: Relationship,
+    #[serde(rename = "referredEntities", skip_serializing_if = "HashMap::is_empty")]
+    referred_entities: HashMap<String, EntityHeader>,
+}
+
+impl RelationshipApiResponse {
+    fn new(relationship: Relationship, referred_entities: HashMap<String, EntityHeader>) -> Self {
+        Self {
+            relationship_flat: relationship.clone(),
+            relationship,
+            referred_entities,
+        }
+    }
+}
+
 /// Create a single relationship
 ///
 /// POST /v2/relationship
 pub async fn create_relationship(
     State(state): State<RelationshipAppState>,
     Json(relationship): Json<Relationship>,
-) -> Result<(StatusCode, Json<RelationshipWithExtInfo>)> {
+) -> Result<(StatusCode, Json<RelationshipApiResponse>)> {
     let guid = state.store.create_relationship(&relationship).await?;
     let created = state.store.get_relationship(&guid).await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(RelationshipWithExtInfo {
-            relationship: created,
-            referred_entities: HashMap::new(),
-        }),
+        Json(RelationshipApiResponse::new(created, HashMap::new())),
     ))
 }
 
@@ -47,7 +62,7 @@ pub async fn create_relationship(
 pub async fn get_relationship_by_guid(
     State(state): State<RelationshipAppState>,
     Path(guid): Path<String>,
-) -> Result<Json<RelationshipWithExtInfo>> {
+) -> Result<Json<RelationshipApiResponse>> {
     let relationship = state.store.get_relationship(&guid).await?;
 
     // Build referred entities map (entities at endpoints)
@@ -71,10 +86,10 @@ pub async fn get_relationship_by_guid(
         }
     }
 
-    Ok(Json(RelationshipWithExtInfo {
+    Ok(Json(RelationshipApiResponse::new(
         relationship,
         referred_entities,
-    }))
+    )))
 }
 
 /// Update relationship
@@ -83,7 +98,7 @@ pub async fn get_relationship_by_guid(
 pub async fn update_relationship(
     State(state): State<RelationshipAppState>,
     Json(relationship): Json<Relationship>,
-) -> Result<Json<RelationshipWithExtInfo>> {
+) -> Result<Json<RelationshipApiResponse>> {
     state.store.update_relationship(&relationship).await?;
 
     let updated = state
@@ -91,10 +106,7 @@ pub async fn update_relationship(
         .get_relationship(relationship.guid.as_ref().unwrap())
         .await?;
 
-    Ok(Json(RelationshipWithExtInfo {
-        relationship: updated,
-        referred_entities: HashMap::new(),
-    }))
+    Ok(Json(RelationshipApiResponse::new(updated, HashMap::new())))
 }
 
 /// Delete relationship by GUID

@@ -19,6 +19,10 @@ cd tests
 # 运行所有测试
 uv run python run_test_data.py
 
+# 运行性能测试
+uv run python run_perf_test.py
+uv run python run_perf_test.py --base-url http://127.0.0.1:31000 --requests 500 --concurrency 20
+
 # 运行指定命令
 uv run python run_test_data.py types
 uv run python run_test_data.py entities
@@ -75,6 +79,34 @@ uv run python run_test_data.py --base-url http://localhost:8080 all
    ```bash
    uv run python run_test_data.py cleanup
    ```
+
+## 性能测试
+
+性能脚本会先清理并加载标准测试数据，然后并发压测几个常用读接口：
+
+- `types/typedef/name/{name}`
+- `entity/uniqueAttribute`
+- `search/basic`
+- `search/relations`
+- `lineage/uniqueAttribute`
+
+不会压测 `graph/stats`，只覆盖与 Atlas 兼容相关的接口。
+
+示例：
+
+```bash
+uv run python run_perf_test.py --base-url http://127.0.0.1:31000 --requests 500 --concurrency 20
+```
+
+输出包括：
+
+- 总请求数
+- 并发数
+- 总耗时
+- 吞吐量（req/s）
+- 平均延迟
+- P50 / P95 / P99 延迟
+- 失败请求样例
 
 ## 测试数据文件
 

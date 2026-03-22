@@ -351,6 +351,34 @@ impl Default for EntitiesWithExtInfo {
     }
 }
 
+// ============================================================================
+// Entity Request (for Atlas API v2 compatibility)
+// ============================================================================
+
+/// Request wrapper for creating/updating entities (Atlas API v2 compatible)
+///
+/// Atlas expects the request body to be wrapped in an "entity" key:
+/// ```json
+/// {
+///   "entity": {
+///     "typeName": "column_meta",
+///     "attributes": {...}
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityRequest {
+    /// The entity to create/update
+    pub entity: Entity,
+}
+
+impl EntityRequest {
+    /// Create a new request wrapper
+    pub fn new(entity: Entity) -> Self {
+        Self { entity }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

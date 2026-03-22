@@ -19,6 +19,16 @@ fn client() -> Client {
         .expect("Failed to create HTTP client")
 }
 
+fn assert_type_name(type_body: &Value, expected_name: &str) {
+    assert_eq!(type_body["name"].as_str(), Some(expected_name));
+}
+
+fn attribute_defs(type_body: &Value) -> &[Value] {
+    type_body["attributeDefs"]
+        .as_array()
+        .expect("attributeDefs should be an array")
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -137,21 +147,12 @@ async fn test_type_crud_lifecycle() {
 
     assert_eq!(get_response.status(), 200);
     let type_body: Value = get_response.json().await.expect("Failed to parse JSON");
-    assert!(type_body["entityDefs"].is_array());
-
-    // Verify the retrieved type content
-    let entity_defs = type_body["entityDefs"]
-        .as_array()
-        .expect("entityDefs should be an array");
-    assert!(!entity_defs.is_empty(), "entityDefs should not be empty");
-
-    let entity_def = &entity_defs[0];
-    assert_eq!(entity_def["name"].as_str(), Some(type_name.as_str()));
-    assert!(entity_def["superTypes"].is_array());
-    assert!(entity_def["attributeDefs"].is_array());
+    assert_type_name(&type_body, &type_name);
+    assert!(type_body["superTypes"].is_array());
+    assert!(type_body["attributeDefs"].is_array());
 
     // Verify superTypes contains "DataSet"
-    let super_types: Vec<&str> = entity_def["superTypes"]
+    let super_types: Vec<&str> = type_body["superTypes"]
         .as_array()
         .unwrap()
         .iter()
@@ -163,7 +164,7 @@ async fn test_type_crud_lifecycle() {
     );
 
     // Verify specific attributes exist
-    let attr_defs = entity_def["attributeDefs"].as_array().unwrap();
+    let attr_defs = attribute_defs(&type_body);
     let attr_names: Vec<&str> = attr_defs
         .iter()
         .filter_map(|a| a["name"].as_str())
@@ -262,10 +263,7 @@ async fn test_type_crud_lifecycle() {
 
     assert_eq!(verify_response.status(), 200);
     let verify_body: Value = verify_response.json().await.expect("Failed to parse JSON");
-    let entity_def = &verify_body["entityDefs"][0];
-    let attr_names: Vec<&str> = entity_def["attributeDefs"]
-        .as_array()
-        .unwrap()
+    let attr_names: Vec<&str> = attribute_defs(&verify_body)
         .iter()
         .map(|a| a["name"].as_str().unwrap())
         .collect();
@@ -355,20 +353,12 @@ async fn test_create_enum_type() {
 
     assert_eq!(get_response.status(), 200);
     let enum_body: Value = get_response.json().await.expect("Failed to parse JSON");
-    assert!(enum_body["enumDefs"].is_array());
-
-    let enum_defs = enum_body["enumDefs"]
-        .as_array()
-        .expect("enumDefs should be an array");
-    assert!(!enum_defs.is_empty(), "enumDefs should not be empty");
-
-    let enum_def = &enum_defs[0];
-    assert_eq!(enum_def["name"].as_str(), Some("test_status"));
-    assert_eq!(enum_def["description"].as_str(), Some("Test status enum"));
-    assert_eq!(enum_def["defaultValue"].as_str(), Some("ACTIVE"));
+    assert_type_name(&enum_body, "test_status");
+    assert_eq!(enum_body["description"].as_str(), Some("Test status enum"));
+    assert_eq!(enum_body["defaultValue"].as_str(), Some("ACTIVE"));
 
     // Verify element definitions
-    let element_defs = enum_def["elementDefs"]
+    let element_defs = enum_body["elementDefs"]
         .as_array()
         .expect("elementDefs should be an array");
     let element_values: Vec<&str> = element_defs
@@ -445,27 +435,14 @@ async fn test_create_classification_type() {
 
     assert_eq!(get_response.status(), 200);
     let classification_body: Value = get_response.json().await.expect("Failed to parse JSON");
-    assert!(classification_body["classificationDefs"].is_array());
-
-    let classification_defs = classification_body["classificationDefs"]
-        .as_array()
-        .expect("classificationDefs should be an array");
-    assert!(
-        !classification_defs.is_empty(),
-        "classificationDefs should not be empty"
-    );
-
-    let classification_def = &classification_defs[0];
-    assert_eq!(classification_def["name"].as_str(), Some("test_pii"));
+    assert_type_name(&classification_body, "test_pii");
     assert_eq!(
-        classification_def["description"].as_str(),
+        classification_body["description"].as_str(),
         Some("PII classification for testing")
     );
 
     // Verify attribute definitions
-    let attr_defs = classification_def["attributeDefs"]
-        .as_array()
-        .expect("attributeDefs should be an array");
+    let attr_defs = attribute_defs(&classification_body);
     let attr_names: Vec<&str> = attr_defs
         .iter()
         .filter_map(|a| a["name"].as_str())
@@ -537,24 +514,14 @@ async fn test_create_struct_type() {
 
     assert_eq!(get_response.status(), 200);
     let struct_body: Value = get_response.json().await.expect("Failed to parse JSON");
-    assert!(struct_body["structDefs"].is_array());
-
-    let struct_defs = struct_body["structDefs"]
-        .as_array()
-        .expect("structDefs should be an array");
-    assert!(!struct_defs.is_empty(), "structDefs should not be empty");
-
-    let struct_def = &struct_defs[0];
-    assert_eq!(struct_def["name"].as_str(), Some("test_address"));
+    assert_type_name(&struct_body, "test_address");
     assert_eq!(
-        struct_def["description"].as_str(),
+        struct_body["description"].as_str(),
         Some("Address struct for testing")
     );
 
     // Verify attribute definitions
-    let attr_defs = struct_def["attributeDefs"]
-        .as_array()
-        .expect("attributeDefs should be an array");
+    let attr_defs = attribute_defs(&struct_body);
     let attr_names: Vec<&str> = attr_defs
         .iter()
         .filter_map(|a| a["name"].as_str())
@@ -647,32 +614,24 @@ async fn test_create_relationship_type() {
 
     assert_eq!(get_response.status(), 200);
     let rel_body: Value = get_response.json().await.expect("Failed to parse JSON");
-    assert!(rel_body["relationshipDefs"].is_array());
-
-    let rel_defs = rel_body["relationshipDefs"]
-        .as_array()
-        .expect("relationshipDefs should be an array");
-    assert!(!rel_defs.is_empty(), "relationshipDefs should not be empty");
-
-    let rel_def = &rel_defs[0];
-    assert_eq!(rel_def["name"].as_str(), Some("test_table_columns"));
+    assert_type_name(&rel_body, "test_table_columns");
     assert_eq!(
-        rel_def["description"].as_str(),
+        rel_body["description"].as_str(),
         Some("Table to columns relationship")
     );
     assert_eq!(
-        rel_def["relationshipCategory"].as_str(),
+        rel_body["relationshipCategory"].as_str(),
         Some("COMPOSITION")
     );
-    assert_eq!(rel_def["propagateTags"].as_str(), Some("ONE_TO_TWO"));
+    assert_eq!(rel_body["propagateTags"].as_str(), Some("ONE_TO_TWO"));
 
     // Verify end definitions
-    let end_def1 = &rel_def["endDef1"];
+    let end_def1 = &rel_body["endDef1"];
     assert_eq!(end_def1["type"].as_str(), Some("DataSet"));
     assert_eq!(end_def1["name"].as_str(), Some("columns"));
     assert_eq!(end_def1["cardinality"].as_str(), Some("SET"));
 
-    let end_def2 = &rel_def["endDef2"];
+    let end_def2 = &rel_body["endDef2"];
     assert_eq!(end_def2["type"].as_str(), Some("DataSet"));
     assert_eq!(end_def2["name"].as_str(), Some("table"));
     assert_eq!(end_def2["cardinality"].as_str(), Some("SINGLE"));
@@ -864,7 +823,7 @@ async fn test_recreate_type_after_deletion() {
         .expect("Failed to get recreated type");
     assert_eq!(get_response3.status(), 200);
     let body: Value = get_response3.json().await.expect("Failed to parse JSON");
-    assert_eq!(body["entityDefs"][0]["name"], type_name);
+    assert_eq!(body["name"], type_name);
 
     // Cleanup
     client

@@ -560,15 +560,16 @@ async fn test_lineage_entity_with_no_relationships() {
     let status = response.status();
     if status == 200 {
         let body: Value = response.json().await.expect("Failed to parse JSON");
-        // Should have root_guid but empty nodes and edges
+        // Current API includes the root entity itself in nodes, but should still have no lineage edges.
         assert_eq!(body["root_guid"].as_str(), Some(isolated_guid.as_str()));
         let nodes = body["nodes"].as_array().expect("nodes should be array");
         let edges = body["edges"].as_array().expect("edges should be array");
         assert_eq!(
             nodes.len(),
-            0,
-            "Isolated entity should have no lineage nodes"
+            1,
+            "Isolated entity should only include the root node"
         );
+        assert_eq!(nodes[0]["id"].as_str(), Some(isolated_guid.as_str()));
         assert_eq!(
             edges.len(),
             0,

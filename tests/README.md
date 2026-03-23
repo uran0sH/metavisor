@@ -19,9 +19,11 @@ cd tests
 # 运行所有测试
 uv run python run_test_data.py
 
-# 运行性能测试
+# 运行性能测试（默认使用 http://127.0.0.1:31000/api/metavisor/v1）
 uv run python run_perf_test.py
-uv run python run_perf_test.py --base-url http://127.0.0.1:31000 --requests 500 --concurrency 20
+
+# 指定不同 API 前缀（如 Atlas）
+uv run python run_perf_test.py --base-url http://127.0.0.1:31000/api/atlas/v2 --requests 500 --concurrency 20
 
 # 运行指定命令
 uv run python run_test_data.py types
@@ -42,8 +44,11 @@ uv run python run_test_data.py get-entity column_meta BDSP_SPCP.T80_PC8_CPS_PBK.
 # 通过 GUID 查询实体
 uv run python run_test_data.py get-entity-by-guid <guid>
 
-# 指定服务器地址
+# 指定服务器地址（支持完整 API 路径）
 uv run python run_test_data.py --base-url http://localhost:8080 all
+
+# 指定 Atlas 兼容 API
+uv run python run_test_data.py --base-url http://8.92.9.185:21000/api/atlas/v2 all
 ```
 
 ## 命令说明
@@ -82,31 +87,67 @@ uv run python run_test_data.py --base-url http://localhost:8080 all
 
 ## 性能测试
 
-性能脚本会先清理并加载标准测试数据，然后并发压测几个常用读接口：
+`run_perf_test.py` 用于压测 Metavisor API，支持混合读写负载。
 
-- `types/typedef/name/{name}`
-- `entity/uniqueAttribute`
-- `search/basic`
-- `search/relations`
-- `lineage/uniqueAttribute`
-
-不会压测 `graph/stats`，只覆盖与 Atlas 兼容相关的接口。
-
-示例：
+### 使用方法
 
 ```bash
-uv run python run_perf_test.py --base-url http://127.0.0.1:31000 --requests 500 --concurrency 20
+cd tests
+
+# 默认参数（200请求，16并发）
+uv run python run_perf_test.py
+
+# Metavisor API（完整 base-url 包含 API 前缀）
+uv run python run_perf_test.py \
+  --base-url http://127.0.0.1:31000/api/metavisor/v1 \
+  --requests 500 \
+  --concurrency 20
+
+# Atlas API 兼容模式
+uv run python run_perf_test.py \
+  --base-url http://8.92.9.185:21000/api/atlas/v2 \
+  --requests 1000 \
+  --concurrency 32
 ```
 
-输出包括：
+### 测试流程
 
-- 总请求数
-- 并发数
-- 总耗时
-- 吞吐量（req/s）
-- 平均延迟
-- P50 / P95 / P99 延迟
-- 失败请求样例
+1. **准备阶段**：清理并加载标准测试数据（类型、实体、关系）
+2. **压测阶段**：并发执行混合读写操作
+
+### 测试负载构成
+
+| 操作类型 | 占比 | 接口 | 说明 |
+|---------|------|------|------|
+| **读操作** | ~45% | | |
+| GET entity | 27% | `/entity/uniqueAttribute` | 通过 qualifiedName 查询 |
+| GET typedef | 9% | `/types/typedef/name/{name}` | 查询类型定义 |
+| GET relationship | 9% | `/relationship/guid/{guid}` | 查询关系详情 |
+| **写操作** | ~55% | | |
+| POST create type | 9% | `/types/typedefs` | 创建类型定义 |
+| POST create entity | 27% | `/entity` | 创建实体（2种变体） |
+| POST create relationship | 9% | `/relationship` | 创建关系 |
+| POST update entity | 9% | `/entity` | 更新已有实体 |
+
+### 输出指标
+
+```
+Total requests: 110
+Concurrency: 8
+Elapsed: 0.04s
+Throughput: 2728.23 req/s
+Success: 110
+Failed: 0
+Avg latency: 2.77 ms
+P50 latency: 2.66 ms
+P95 latency: 4.27 ms
+P99 latency: 4.71 ms
+```
+
+- **吞吐量**：每秒处理的请求数
+- **平均延迟**：所有请求的平均响应时间
+- **P50/P95/P99**：延迟分位数，反映延迟分布
+- **失败请求**：展示前5个失败样例
 
 ## 测试数据文件
 

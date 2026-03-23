@@ -108,15 +108,22 @@ class MetavisorClient:
 
     def check_server(self) -> bool:
         """Check if server is running."""
-        log_info(f"Checking if server is running at {self.base_url}...")
+        # Extract root URL (without API prefix) for health check
+        # e.g., "http://localhost:31000/api/metavisor/v1" -> "http://localhost:31000"
+        import re
+        root_url = re.sub(r'/api/.*', '', self.base_url)
+        if not root_url:
+            root_url = self.base_url
+        
+        log_info(f"Checking if server is running at {root_url}...")
         try:
-            response = self.session.get(f"{self.base_url}/health", timeout=5)
+            response = self.session.get(f"{root_url}/health", timeout=5)
             if response.status_code < 400:
                 log_success("Server is running")
                 return True
         except requests.RequestException:
             pass
-        log_error(f"Server is not running at {self.base_url}")
+        log_error(f"Server is not running at {root_url}")
         log_info("Start the server with: cargo run --bin metavisor")
         return False
 

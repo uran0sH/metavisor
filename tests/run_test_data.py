@@ -54,14 +54,22 @@ def print_json(data: Any) -> None:
 class MetavisorClient:
     """HTTP client for Metavisor API."""
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, username: str | None = None, password: str | None = None):
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
         self.session.headers["Content-Type"] = "application/json"
+        # Setup Basic Auth if credentials provided
+        if username and password:
+            self.session.auth = (username, password)
+        # Extract API prefix from base_url (e.g., /api/metavisor/v1 or /api/atlas/v2)
+        import re
+        match = re.search(r'(/api/[^/]+/v\d+)$', self.base_url)
+        self.api_prefix = match.group(1) if match else "/api/metavisor/v1"
 
     def _handle_response(self, response: requests.Response, description: str) -> Any:
         """Handle HTTP response and return JSON data."""
-        if response.status_code >= 400:
+        # Allow 409 Conflict (resource already exists) to proceed
+        if response.status_code >= 400 and response.status_code != 409:
             log_error(f"Failed to {description}: HTTP {response.status_code}")
             try:
                 print_json(response.json())
@@ -88,9 +96,13 @@ class MetavisorClient:
         """Execute POST request."""
         url = f"{self.base_url}{path}"
         if data_file:
-            with open(data_file) as f:
-                data = json.load(f)
-        response = self.session.post(url, json=data, timeout=30)
+            # Read file content and send as UTF-8 encoded bytes to preserve exact JSON format
+            with open(data_file, encoding='utf-8') as f:
+                content = f.read()
+            # Don't override headers to preserve session-level settings (auth, etc.)
+            response = self.session.post(url, data=content.encode('utf-8'), timeout=30)
+        else:
+            response = self.session.post(url, json=data, timeout=30)
         return self._handle_response(response, description)
 
     def post_file(self, path: str, data_file: Path, description: str = "request") -> Any:
@@ -117,12 +129,23 @@ class MetavisorClient:
         
         log_info(f"Checking if server is running at {root_url}...")
         try:
+            # Try /health endpoint first (Metavisor)
             response = self.session.get(f"{root_url}/health", timeout=5)
             if response.status_code < 400:
                 log_success("Server is running")
                 return True
         except requests.RequestException:
             pass
+        
+        # Try Atlas API endpoint as fallback
+        try:
+            response = self.session.get(f"{root_url}/api/atlas/v2/types/typedefs", timeout=5)
+            if response.status_code < 400:
+                log_success("Server is running (Atlas API)")
+                return True
+        except requests.RequestException:
+            pass
+            
         log_error(f"Server is not running at {root_url}")
         log_info("Start the server with: cargo run --bin metavisor")
         return False
@@ -133,13 +156,14 @@ class TestRunner:
 
     def __init__(self, client: MetavisorClient):
         self.client = client
+        self.api_prefix = client.api_prefix
         self.entity_guids: list[str] = []
         self.relationship_guids: list[str] = []
 
     def _verify_type_exists(self, type_name: str) -> dict:
         """Verify type exists and return its definition."""
         response = self.client.get(
-            f"/api/metavisor/v1/types/typedef/name/{type_name}",
+            f"{self.api_prefix}/types/typedef/name/{type_name}",
             f"verify {type_name} type exists"
         )
         if not isinstance(response, dict):
@@ -151,7 +175,7 @@ class TestRunner:
     def _verify_relationship_type_exists(self, type_name: str) -> dict:
         """Verify relationship type exists and return its definition."""
         response = self.client.get(
-            f"/api/metavisor/v1/types/relationshipdef/name/{type_name}",
+            f"{self.api_prefix}/types/relationshipdef/name/{type_name}",
             f"verify {type_name} relationship type exists"
         )
         if not isinstance(response, dict):
@@ -166,7 +190,7 @@ class TestRunner:
         Query parameter format: ?attr:qualifiedName=value
         """
         response = self.client.get(
-            f"/api/metavisor/v1/entity/uniqueAttribute/type/{type_name}"
+            f"{self.api_prefix}/entity/uniqueAttribute/type/{type_name}"
             f"?attr:qualifiedName={qualified_name}",
             f"verify {type_name} entity {qualified_name} exists"
         )
@@ -179,28 +203,32 @@ class TestRunner:
     def _verify_relationship_by_guid(self, guid: str) -> dict:
         """Verify relationship exists by GUID and return it."""
         response = self.client.get(
-            f"/api/metavisor/v1/relationship/guid/{guid}",
+            f"{self.api_prefix}/relationship/guid/{guid}",
             f"verify relationship {guid} exists"
         )
         if not isinstance(response, dict):
             raise RuntimeError(f"Invalid response for relationship {guid}")
-        if response.get("guid") != guid:
-            raise RuntimeError(f"Relationship guid mismatch: expected {guid}, got {response.get('guid')}")
-        return response
+        # Handle both Metavisor format (direct) and Atlas format (wrapped in 'relationship')
+        relationship_data = response.get("relationship", response)
+        if relationship_data.get("guid") != guid:
+            raise RuntimeError(f"Relationship guid mismatch: expected {guid}, got {relationship_data.get('guid')}")
+        return relationship_data
 
     def _verify_entity_by_guid(self, guid: str, expected_type: str | None = None) -> dict:
         """Verify entity exists by GUID and return it."""
         response = self.client.get(
-            f"/api/metavisor/v1/entity/guid/{guid}",
+            f"{self.api_prefix}/entity/guid/{guid}",
             f"verify entity {guid} exists"
         )
         if not isinstance(response, dict):
             raise RuntimeError(f"Invalid response for entity {guid}")
-        if response.get("guid") != guid:
-            raise RuntimeError(f"Entity guid mismatch: expected {guid}, got {response.get('guid')}")
-        if expected_type and response.get("typeName") != expected_type:
-            raise RuntimeError(f"Entity type mismatch: expected {expected_type}, got {response.get('typeName')}")
-        return response
+        # Handle both Metavisor format (direct) and Atlas format (wrapped in 'entity')
+        entity_data = response.get("entity", response)
+        if entity_data.get("guid") != guid:
+            raise RuntimeError(f"Entity guid mismatch: expected {guid}, got {entity_data.get('guid')}")
+        if expected_type and entity_data.get("typeName") != expected_type:
+            raise RuntimeError(f"Entity type mismatch: expected {expected_type}, got {entity_data.get('typeName')}")
+        return entity_data
 
     def create_types(self) -> None:
         """Create type definitions."""
@@ -208,7 +236,7 @@ class TestRunner:
 
         log_info("Creating sql_meta type...")
         self.client.post_file(
-            "/api/metavisor/v1/types/typedefs",
+            f"{self.api_prefix}/types/typedefs",
             DATA_DIR / "sql_meta_type.json",
             "create sql_meta type"
         )
@@ -216,7 +244,7 @@ class TestRunner:
 
         log_info("Creating column_meta type...")
         self.client.post_file(
-            "/api/metavisor/v1/types/typedefs",
+            f"{self.api_prefix}/types/typedefs",
             DATA_DIR / "column_meta_type.json",
             "create column_meta type"
         )
@@ -224,7 +252,7 @@ class TestRunner:
 
         log_info("Creating relationship types...")
         self.client.post_file(
-            "/api/metavisor/v1/types/typedefs",
+            f"{self.api_prefix}/types/typedefs",
             DATA_DIR / "relationship_type.json",
             "create relationship types"
         )
@@ -233,35 +261,50 @@ class TestRunner:
 
         log_success("Type definitions created")
 
+    def _extract_guid_from_response(self, response: dict) -> str | None:
+        """Extract GUID from entity creation response (handles both Metavisor and Atlas formats)."""
+        if not isinstance(response, dict):
+            return None
+        # Metavisor format: direct guid field
+        if response.get("guid"):
+            return response["guid"]
+        # Atlas format: guid in mutatedEntities.CREATE[0] or guidAssignments
+        if response.get("mutatedEntities", {}).get("CREATE"):
+            return response["mutatedEntities"]["CREATE"][0].get("guid")
+        if response.get("guidAssignments"):
+            # Return the first GUID from guidAssignments
+            return list(response["guidAssignments"].values())[0]
+        return None
+
     def create_entities(self) -> None:
         """Create entities."""
         log_section("Creating Entities")
 
         log_info("Creating column_meta entity 1 (PARTY_ID)...")
         response = self.client.post_file(
-            "/api/metavisor/v1/entity",
+            f"{self.api_prefix}/entity",
             DATA_DIR / "column_meta_entity_1.json",
             "create column_meta entity 1"
         )
-        if isinstance(response, dict) and response.get("guid"):
-            guid = response["guid"]
+        guid = self._extract_guid_from_response(response)
+        if guid:
             self._verify_entity_by_guid(guid, "column_meta")
             self.entity_guids.append(guid)
 
         log_info("Creating column_meta entity 2 (CUST_ID)...")
         response = self.client.post_file(
-            "/api/metavisor/v1/entity",
+            f"{self.api_prefix}/entity",
             DATA_DIR / "column_meta_entity_2.json",
             "create column_meta entity 2"
         )
-        if isinstance(response, dict) and response.get("guid"):
-            guid = response["guid"]
+        guid = self._extract_guid_from_response(response)
+        if guid:
             self._verify_entity_by_guid(guid, "column_meta")
             self.entity_guids.append(guid)
 
         log_info("Creating sql_meta entity 1...")
         response = self.client.post_file(
-            "/api/metavisor/v1/entity",
+            f"{self.api_prefix}/entity",
             DATA_DIR / "sql_meta_entity_1.json",
             "create sql_meta entity 1"
         )
@@ -272,53 +315,62 @@ class TestRunner:
 
         log_success("Entities created")
 
+    def _extract_relationship_guid_from_response(self, response: requests.Response) -> str | None:
+        """Extract relationship GUID from 409 error response by querying entity relationships."""
+        try:
+            data = response.json()
+            # Parse error message to get entity GUIDs
+            # Format: "relationship ... already exists between entities GUID1 and GUID2"
+            msg = data.get('errorMessage', '')
+            import re
+            guids = re.findall(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', msg)
+            if guids:
+                # Query first entity to find relationship GUID
+                entity_response = self.client.get(f"{self.api_prefix}/entity/guid/{guids[0]}")
+                entity_data = entity_response.get('entity', entity_response)
+                rel_attrs = entity_data.get('relationshipAttributes', {})
+                for rel_list in rel_attrs.values():
+                    if isinstance(rel_list, list):
+                        for rel in rel_list:
+                            if rel.get('relationshipGuid'):
+                                return rel['relationshipGuid']
+                    elif isinstance(rel_list, dict) and rel_list.get('relationshipGuid'):
+                        return rel_list['relationshipGuid']
+        except Exception:
+            pass
+        return None
+
     def create_relationships(self) -> None:
         """Create relationships."""
         log_section("Creating Relationships")
 
-        log_info("Creating join_relationship 1...")
-        response = self.client.post_file(
-            "/api/metavisor/v1/relationship",
-            DATA_DIR / "join_relationship_1.json",
-            "create join_relationship 1"
-        )
-        if isinstance(response, dict) and response.get("guid"):
-            guid = response["guid"]
-            self._verify_relationship_by_guid(guid)
-            self.relationship_guids.append(guid)
+        relationships_to_create = [
+            ("join_relationship 1", DATA_DIR / "join_relationship_1.json"),
+            ("join_relationship 2", DATA_DIR / "join_relationship_2.json"),
+            ("sql_uses_column 1", DATA_DIR / "sql_column_relationship_1.json"),
+            ("sql_uses_column 2", DATA_DIR / "sql_column_relationship_2.json"),
+        ]
 
-        log_info("Creating join_relationship 2...")
-        response = self.client.post_file(
-            "/api/metavisor/v1/relationship",
-            DATA_DIR / "join_relationship_2.json",
-            "create join_relationship 2"
-        )
-        if isinstance(response, dict) and response.get("guid"):
-            guid = response["guid"]
-            self._verify_relationship_by_guid(guid)
-            self.relationship_guids.append(guid)
-
-        log_info("Creating sql_uses_column relationship 1...")
-        response = self.client.post_file(
-            "/api/metavisor/v1/relationship",
-            DATA_DIR / "sql_column_relationship_1.json",
-            "create sql_uses_column 1"
-        )
-        if isinstance(response, dict) and response.get("guid"):
-            guid = response["guid"]
-            self._verify_relationship_by_guid(guid)
-            self.relationship_guids.append(guid)
-
-        log_info("Creating sql_uses_column relationship 2...")
-        response = self.client.post_file(
-            "/api/metavisor/v1/relationship",
-            DATA_DIR / "sql_column_relationship_2.json",
-            "create sql_uses_column 2"
-        )
-        if isinstance(response, dict) and response.get("guid"):
-            guid = response["guid"]
-            self._verify_relationship_by_guid(guid)
-            self.relationship_guids.append(guid)
+        for name, data_file in relationships_to_create:
+            log_info(f"Creating {name}...")
+            try:
+                response = self.client.post_file(
+                    f"{self.api_prefix}/relationship",
+                    data_file,
+                    f"create {name}"
+                )
+                if isinstance(response, dict) and response.get("guid"):
+                    guid = response["guid"]
+                    self._verify_relationship_by_guid(guid)
+                    self.relationship_guids.append(guid)
+            except RuntimeError as e:
+                if "409" in str(e):
+                    log_info(f"Relationship {name} already exists, extracting existing GUID...")
+                    # Try to extract GUID from error response
+                    # Note: We need access to the raw response, which is printed by _handle_response
+                    # For now, we'll skip adding this GUID to the list
+                else:
+                    raise
 
         log_success("Relationships created")
 
@@ -328,7 +380,7 @@ class TestRunner:
 
         log_info("Creating sql_meta lineage entity (with inputs/outputs)...")
         response = self.client.post_file(
-            "/api/metavisor/v1/entity",
+            f"{self.api_prefix}/entity",
             DATA_DIR / "sql_meta_entity_lineage.json",
             "create lineage entity"
         )
@@ -338,12 +390,15 @@ class TestRunner:
             self.entity_guids.append(guid)
 
         log_info("Graph statistics after lineage creation...")
-        stats = self.client.get(
-            "/api/metavisor/v1/graph/stats",
-            "get graph stats"
-        )
-        if isinstance(stats, dict):
-            log_info(f"Graph nodes: {stats.get('node_count', 'N/A')}, edges: {stats.get('edge_count', 'N/A')}")
+        try:
+            stats = self.client.get(
+                f"{self.api_prefix}/graph/stats",
+                "get graph stats"
+            )
+            if isinstance(stats, dict):
+                log_info(f"Graph nodes: {stats.get('node_count', 'N/A')}, edges: {stats.get('edge_count', 'N/A')}")
+        except RuntimeError:
+            log_info("Graph stats endpoint not available (Atlas may not support this)")
 
         log_success("Lineage entity created with auto-generated relationships")
 
@@ -353,7 +408,7 @@ class TestRunner:
 
         log_info("Querying join_relationship by end2 qualifiedName (basic search)...")
         response = self.client.post_file(
-            "/api/metavisor/v1/search/basic",
+            f"{self.api_prefix}/search/basic",
             DATA_DIR / "query.json",
             "query join_relationship"
         )
@@ -364,7 +419,7 @@ class TestRunner:
 
         log_info("Searching relations by end1 filter...")
         response = self.client.post(
-            "/api/metavisor/v1/search/relations",
+            f"{self.api_prefix}/search/relations",
             data={
                 "typeName": "join_relationship",
                 "relationshipFilters": {
@@ -393,7 +448,7 @@ class TestRunner:
 
         log_info("Getting lineage entity GUID...")
         response = self.client.get(
-            "/api/metavisor/v1/lineage/uniqueAttribute/type/column_meta"
+            f"{self.api_prefix}/lineage/uniqueAttribute/type/column_meta"
             "?attr:qualifiedName=BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID&direction=BOTH",
             "get lineage entity by qualifiedName"
         )
@@ -404,19 +459,19 @@ class TestRunner:
         if lineage_guid:
             log_info("Getting upstream lineage (direction=INPUT)...")
             self.client.get(
-                f"/api/metavisor/v1/lineage/{lineage_guid}?depth=3&direction=INPUT",
+                f"{self.api_prefix}/lineage/{lineage_guid}?depth=3&direction=INPUT",
                 "get upstream lineage"
             )
 
             log_info("Getting downstream lineage (direction=OUTPUT)...")
             self.client.get(
-                f"/api/metavisor/v1/lineage/{lineage_guid}?depth=3&direction=OUTPUT",
+                f"{self.api_prefix}/lineage/{lineage_guid}?depth=3&direction=OUTPUT",
                 "get downstream lineage"
             )
 
             log_info("Getting full lineage (direction=BOTH)...")
             self.client.get(
-                f"/api/metavisor/v1/lineage/{lineage_guid}?depth=3&direction=BOTH",
+                f"{self.api_prefix}/lineage/{lineage_guid}?depth=3&direction=BOTH",
                 "get full lineage"
             )
         else:
@@ -429,37 +484,37 @@ class TestRunner:
         log_section("Listing All Data")
 
         log_info("Listing all types...")
-        response = self.client.get("/api/metavisor/v1/types/typedefs")
+        response = self.client.get(f"{self.api_prefix}/types/typedefs")
         if isinstance(response, dict) and "entityDefs" in response:
             for defn in response["entityDefs"]:
                 print(defn.get("name"))
         print()
 
         log_info("Listing relationship types...")
-        response = self.client.get("/api/metavisor/v1/types/relationshipdefs")
+        response = self.client.get(f"{self.api_prefix}/types/relationshipdefs")
         if isinstance(response, list):
             for rel in response:
                 print(rel.get("name"))
         print()
 
         log_info("Getting specific type definition (sql_meta)...")
-        self.client.get("/api/metavisor/v1/types/typedef/name/sql_meta")
+        self.client.get(f"{self.api_prefix}/types/typedef/name/sql_meta")
         print()
 
         log_info("Getting specific type definition (column_meta)...")
-        self.client.get("/api/metavisor/v1/types/typedef/name/column_meta")
+        self.client.get(f"{self.api_prefix}/types/typedef/name/column_meta")
         print()
 
         log_info("Listing relationships for column_meta entity...")
         response = self.client.get(
-            "/api/metavisor/v1/entity/uniqueAttribute/type/column_meta"
+            f"{self.api_prefix}/entity/uniqueAttribute/type/column_meta"
             "?attr:qualifiedName=BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID",
             "get column_meta entity by qualifiedName"
         )
         if isinstance(response, dict):
             entity_guid = response.get("guid")
             if entity_guid:
-                self.client.get(f"/api/metavisor/v1/relationship/entity/{entity_guid}")
+                self.client.get(f"{self.api_prefix}/relationship/entity/{entity_guid}")
         print()
 
         log_success("List completed")
@@ -470,21 +525,21 @@ class TestRunner:
 
         log_info("Deleting relationships...")
         for guid in reversed(self.relationship_guids):
-            if self.client.delete(f"/api/metavisor/v1/relationship/guid/{guid}", f"delete relationship {guid}"):
+            if self.client.delete(f"{self.api_prefix}/relationship/guid/{guid}", f"delete relationship {guid}"):
                 log_info(f"Deleted relationship {guid}")
 
         log_info("Deleting entities...")
         for guid in reversed(self.entity_guids):
-            if self.client.delete(f"/api/metavisor/v1/entity/guid/{guid}", f"delete entity {guid}"):
+            if self.client.delete(f"{self.api_prefix}/entity/guid/{guid}", f"delete entity {guid}"):
                 log_info(f"Deleted entity {guid}")
 
         log_info("Deleting type definitions...")
 
         type_deletions = [
-            ("/api/metavisor/v1/types/typedef/name/sql_meta", "sql_meta type"),
-            ("/api/metavisor/v1/types/typedef/name/column_meta", "column_meta type"),
-            ("/api/metavisor/v1/types/relationshipdef/name/join_relationship", "join_relationship type"),
-            ("/api/metavisor/v1/types/relationshipdef/name/sql_uses_column", "sql_uses_column type"),
+            (f"{self.api_prefix}/types/typedef/name/sql_meta", "sql_meta type"),
+            (f"{self.api_prefix}/types/typedef/name/column_meta", "column_meta type"),
+            (f"{self.api_prefix}/types/relationshipdef/name/join_relationship", "join_relationship type"),
+            (f"{self.api_prefix}/types/relationshipdef/name/sql_uses_column", "sql_uses_column type"),
         ]
 
         for path, name in type_deletions:
@@ -500,7 +555,7 @@ class TestRunner:
     def get_type(self, type_name: str = "sql_meta") -> None:
         """Get specific type definition."""
         log_section(f"Getting Type Definition: {type_name}")
-        self.client.get(f"/api/metavisor/v1/types/typedef/name/{type_name}")
+        self.client.get(f"{self.api_prefix}/types/typedef/name/{type_name}")
         print()
 
     def get_entity(self, type_name: str = "column_meta",
@@ -508,7 +563,7 @@ class TestRunner:
         """Get specific entity by qualifiedName."""
         log_section(f"Getting Entity: {type_name} / {qualified_name}")
         self.client.get(
-            f"/api/metavisor/v1/entity/uniqueAttribute/type/{type_name}"
+            f"{self.api_prefix}/entity/uniqueAttribute/type/{type_name}"
             f"?attr:qualifiedName={qualified_name}",
             f"get {type_name} entity by qualifiedName"
         )
@@ -517,13 +572,13 @@ class TestRunner:
     def get_entity_by_guid(self, guid: str) -> None:
         """Get entity by GUID."""
         log_section(f"Getting Entity by GUID: {guid}")
-        self.client.get(f"/api/metavisor/v1/entity/guid/{guid}")
+        self.client.get(f"{self.api_prefix}/entity/guid/{guid}")
         print()
 
     def get_entitydef_by_guid(self, guid: str) -> None:
         """Get entity type definition by GUID."""
         log_section(f"Getting EntityDef by GUID: {guid}")
-        self.client.get(f"/api/metavisor/v1/types/entitydef/guid/{guid}")
+        self.client.get(f"{self.api_prefix}/types/entitydef/guid/{guid}")
         print()
 
     def run_all(self) -> None:

@@ -200,14 +200,30 @@ impl RelationshipStore for KvRelationshipStore {
 
         let key = relationship_key(guid);
 
-        // Check if relationship exists
-        if !self
-            .kv
-            .exists(&key)
-            .await
-            .map_err(|e| CoreError::Storage(e.to_string()))?
-        {
-            return Err(CoreError::RelationshipNotFound(guid.clone()));
+        // Get the existing relationship to verify endpoint consistency
+        let existing_rel = match self.get_relationship(guid).await {
+            Ok(rel) => rel,
+            Err(CoreError::RelationshipNotFound(_)) => {
+                return Err(CoreError::RelationshipNotFound(guid.clone()));
+            }
+            Err(e) => return Err(e),
+        };
+
+        // Check if endpoints are being changed (not allowed)
+        let old_end1_guid = existing_rel.end1.as_ref().and_then(|e| e.guid.as_ref());
+        let new_end1_guid = relationship.end1.as_ref().and_then(|e| e.guid.as_ref());
+        if old_end1_guid != new_end1_guid {
+            return Err(CoreError::Validation(
+                "Cannot change relationship end1 endpoint. Delete and recreate the relationship instead.".to_string()
+            ));
+        }
+
+        let old_end2_guid = existing_rel.end2.as_ref().and_then(|e| e.guid.as_ref());
+        let new_end2_guid = relationship.end2.as_ref().and_then(|e| e.guid.as_ref());
+        if old_end2_guid != new_end2_guid {
+            return Err(CoreError::Validation(
+                "Cannot change relationship end2 endpoint. Delete and recreate the relationship instead.".to_string()
+            ));
         }
 
         // Build batch operations
@@ -228,8 +244,24 @@ impl RelationshipStore for KvRelationshipStore {
             serde_json::to_vec(&header).map_err(|e| CoreError::Storage(e.to_string()))?;
         ops.push(WriteOp::Set {
             key: type_index_key,
-            value: header_bytes,
+            value: header_bytes.clone(),
         });
+
+        // Update endpoint indices (header may have changed)
+        if let Some(end1_guid) = new_end1_guid {
+            let endpoint_key = relationship_endpoint_index_key(end1_guid, guid);
+            ops.push(WriteOp::Set {
+                key: endpoint_key,
+                value: header_bytes.clone(),
+            });
+        }
+        if let Some(end2_guid) = new_end2_guid {
+            let endpoint_key = relationship_endpoint_index_key(end2_guid, guid);
+            ops.push(WriteOp::Set {
+                key: endpoint_key,
+                value: header_bytes,
+            });
+        }
 
         // Execute atomically
         self.kv
@@ -499,6 +531,53 @@ mod tests {
 
         let retrieved = store.get_relationship(&guid).await.unwrap();
         assert_eq!(retrieved.label, Some("updated".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_update_relationship_cannot_change_endpoint() {
+        let (store, type_store) = create_test_stores().await;
+        create_test_relationship_type(&type_store).await;
+
+        // Create relationship: table-1 -> column-1
+        let end1 = ObjectId::by_guid("Table", "table-1");
+        let end2 = ObjectId::by_guid("Column", "column-1");
+        let rel = Relationship::between("table_columns", end1.clone(), end2.clone());
+        let guid = store.create_relationship(&rel).await.unwrap();
+
+        // Try to change end2 to a different GUID
+        let mut updated = store.get_relationship(&guid).await.unwrap();
+        updated.end2 = Some(ObjectId::by_guid("Column", "column-2"));
+
+        let result = store.update_relationship(&updated).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, CoreError::Validation(_)));
+        assert!(err
+            .to_string()
+            .contains("Cannot change relationship end2 endpoint"));
+
+        // Try to change end1 to a different GUID
+        let mut updated2 = store.get_relationship(&guid).await.unwrap();
+        updated2.end1 = Some(ObjectId::by_guid("Table", "table-2"));
+
+        let result2 = store.update_relationship(&updated2).await;
+        assert!(result2.is_err());
+        let err2 = result2.unwrap_err();
+        assert!(matches!(err2, CoreError::Validation(_)));
+        assert!(err2
+            .to_string()
+            .contains("Cannot change relationship end1 endpoint"));
+
+        // Verify original relationship is unchanged
+        let retrieved = store.get_relationship(&guid).await.unwrap();
+        assert_eq!(
+            retrieved.end1.as_ref().unwrap().guid,
+            Some("table-1".to_string())
+        );
+        assert_eq!(
+            retrieved.end2.as_ref().unwrap().guid,
+            Some("column-1".to_string())
+        );
     }
 
     #[tokio::test]

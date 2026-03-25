@@ -11,11 +11,12 @@
 //!   -d, --data-dir <DIR>  Data directory for storage [default: ./data]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use metavisor_server::mcp::MetavisorMcpServer;
 use metavisor_storage::{
-    DefaultMetavisorStore, InMemoryGraphStore, KvEntityStore, KvRelationshipStore, KvStore,
+    DefaultMetavisorStore, GrafeoGraphStore, KvEntityStore, KvRelationshipStore, KvStore,
     KvTypeStore,
 };
 use rmcp::ServiceExt;
@@ -28,6 +29,14 @@ struct Args {
     /// Data directory for storage
     #[arg(short, long, default_value = "./data")]
     data_dir: String,
+
+    /// Graph data directory (for Grafeo)
+    #[arg(long, default_value = "./data/graph")]
+    graph_data_dir: String,
+
+    /// Background propagation interval in seconds (0 to disable)
+    #[arg(long, default_value_t = 30)]
+    propagation_interval: u64,
 }
 
 #[tokio::main]
@@ -45,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     tracing::info!("Starting Metavisor MCP Server (stdio mode)");
+    tracing::info!("Using graph store: {}", metavisor_storage::graph_store_type());
     tracing::info!("Opening storage at {}", args.data_dir);
 
     // Initialize storage
@@ -52,21 +62,29 @@ async fn main() -> anyhow::Result<()> {
     let type_store = Arc::new(KvTypeStore::new(kv_store.clone()));
     let entity_store = Arc::new(KvEntityStore::new(kv_store.clone(), type_store.clone()));
     let relationship_store = Arc::new(KvRelationshipStore::new(kv_store, type_store.clone()));
-    let graph_store = Arc::new(InMemoryGraphStore::new(
+
+    // Create Grafeo graph store wrapped in Arc
+    let graph_store: Arc<GrafeoGraphStore> = Arc::new(GrafeoGraphStore::open(
+        &args.graph_data_dir,
         entity_store.clone(),
         relationship_store.clone(),
-    ));
+    )?);
 
     // Create unified MetavisorStore
     let store = Arc::new(DefaultMetavisorStore::new(
         type_store,
         entity_store,
         relationship_store,
-        graph_store,
+        graph_store.clone(),
     ));
 
     // Initialize graph from persisted data
     store.initialize().await?;
+
+    // Spawn background classification propagation task
+    if args.propagation_interval > 0 {
+        graph_store.spawn_background_propagation(Some(Duration::from_secs(args.propagation_interval)));
+    }
 
     // Create the MCP server
     let server = MetavisorMcpServer::new(metavisor_server::mcp::McpState { store });

@@ -25,4 +25,7 @@ pub enum StorageError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Graph store error: {0}")]
+    Graph(String),
 }

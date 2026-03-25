@@ -13,8 +13,11 @@ tantivy = "0.22"
 metavisor-core = { path = "../metavisor-core" }
 async-trait = "0.1"
 uuid = { version = "1.22", features = ["v4"] }
-petgraph = "0.8"
 tracing.workspace = true
+
+# 图存储后端 - Grafeo
+grafeo = "0.5"
+grafeo-engine = "0.5"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

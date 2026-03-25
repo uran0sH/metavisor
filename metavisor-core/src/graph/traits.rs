@@ -3,6 +3,7 @@
 //! Abstract interface for graph-based operations
 
 use async_trait::async_trait;
+use std::any::Any;
 
 use super::types::{LineageNode, LineageQueryOptions, LineageResult, TraversalDirection};
 use crate::{Classification, Result};
@@ -12,7 +13,9 @@ use crate::{Classification, Result};
 /// This trait provides an abstraction layer for lineage tracking,
 /// graph traversal, and classification propagation.
 #[async_trait]
-pub trait GraphStore: Send + Sync {
+pub trait GraphStore: Send + Sync + Any {
+    /// Convert to Any for downcasting to concrete types
+    fn as_any(&self) -> &dyn Any;
     /// Build or rebuild the in-memory graph from persisted data
     ///
     /// This should be called on startup or when the graph needs to be

@@ -249,9 +249,16 @@ impl WriteAheadLog {
             .list_transaction_metas()
             .await?
             .into_values()
-            .filter(|meta| meta.state != TxState::Aborted && (!meta.kv_applied || !meta.graph_applied || meta.state != TxState::Committed))
+            .filter(|meta| {
+                meta.state != TxState::Aborted
+                    && (!meta.kv_applied || !meta.graph_applied || meta.state != TxState::Committed)
+            })
             .collect();
-        metas.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.tx_id.cmp(&b.tx_id)));
+        metas.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.tx_id.cmp(&b.tx_id))
+        });
         Ok(metas)
     }
 
@@ -273,7 +280,9 @@ impl WriteAheadLog {
 
             self.kv.delete(&self.meta_key(&meta.tx_id)).await?;
             for record in self.get_transaction_ops(&meta.tx_id).await? {
-                self.kv.delete(&self.op_key(&record.tx_id, record.seq)).await?;
+                self.kv
+                    .delete(&self.op_key(&record.tx_id, record.seq))
+                    .await?;
                 cleaned += 1;
             }
             cleaned += 1;
@@ -318,7 +327,9 @@ impl Transaction {
         }
 
         let current_seq = self.seq;
-        self.wal.append_operation(&self.tx_id, current_seq, op).await?;
+        self.wal
+            .append_operation(&self.tx_id, current_seq, op)
+            .await?;
         self.seq += 1;
         Ok(current_seq)
     }

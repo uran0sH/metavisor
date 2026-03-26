@@ -374,34 +374,6 @@ class TestRunner:
 
         log_success("Relationships created")
 
-    def create_lineage_relationships(self) -> None:
-        """Create lineage relationships (process with inputs/outputs)."""
-        log_section("Creating Lineage Entity (with auto-created relationships)")
-
-        log_info("Creating sql_meta lineage entity (with inputs/outputs)...")
-        response = self.client.post_file(
-            f"{self.api_prefix}/entity",
-            DATA_DIR / "sql_meta_entity_lineage.json",
-            "create lineage entity"
-        )
-        if isinstance(response, dict) and response.get("guid"):
-            guid = response["guid"]
-            self._verify_entity_by_guid(guid, "sql_meta")
-            self.entity_guids.append(guid)
-
-        log_info("Graph statistics after lineage creation...")
-        try:
-            stats = self.client.get(
-                f"{self.api_prefix}/graph/stats",
-                "get graph stats"
-            )
-            if isinstance(stats, dict):
-                log_info(f"Graph nodes: {stats.get('node_count', 'N/A')}, edges: {stats.get('edge_count', 'N/A')}")
-        except RuntimeError:
-            log_info("Graph stats endpoint not available (Atlas may not support this)")
-
-        log_success("Lineage entity created with auto-generated relationships")
-
     def run_query(self) -> None:
         """Run query tests."""
         log_section("Running Query Tests")
@@ -590,7 +562,6 @@ class TestRunner:
             self.create_types()
             self.create_entities()
             self.create_relationships()
-            self.create_lineage_relationships()
             self.run_query()
             self.test_lineage()
             self.list_all()
@@ -609,7 +580,6 @@ Commands:
   types                    Create type definitions only
   entities                 Create entities only
   relationships            Create relationships only
-  lineage-relationships    Create lineage relationships (process_inputs/outputs)
   query                    Run query tests only
   lineage                  Run lineage tests only
   list                     List all data
@@ -634,7 +604,6 @@ Commands:
         "types": lambda: runner.create_types(),
         "entities": lambda: runner.create_entities(),
         "relationships": lambda: runner.create_relationships(),
-        "lineage-relationships": lambda: runner.create_lineage_relationships(),
         "query": lambda: runner.run_query(),
         "lineage": lambda: runner.test_lineage(),
         "list": lambda: runner.list_all(),

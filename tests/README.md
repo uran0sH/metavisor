@@ -29,7 +29,7 @@ uv run python run_perf_test.py --base-url http://127.0.0.1:31000/api/atlas/v2 --
 uv run python run_test_data.py types
 uv run python run_test_data.py entities
 uv run python run_test_data.py relationships
-uv run python run_test_data.py lineage-relationships
+
 uv run python run_test_data.py query
 uv run python run_test_data.py lineage
 uv run python run_test_data.py list
@@ -59,7 +59,6 @@ uv run python run_test_data.py --base-url http://8.92.9.185:21000/api/atlas/v2 a
 | `types` | 创建类型定义 |
 | `entities` | 创建实体 |
 | `relationships` | 创建关系 |
-| `lineage-relationships` | 创建血缘关系（含 process_inputs/outputs） |
 | `query` | 运行查询测试（basic search + relations search） |
 | `lineage` | 运行血缘测试 |
 | `list` | 列出所有数据 |

@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use tower::ServiceExt;
 
 use metavisor_core::{
-    AttributeDef, Entity, EntityDef, EntityHeader, LineageQueryOptions, MetavisorStore, ObjectId,
-    Relationship, RelationshipHeader, TraversalDirection, TypeDef,
+    AttributeDef, Entity, EntityDef, EntityHeader, MetavisorStore, ObjectId, Relationship,
+    RelationshipHeader, TypeDef,
 };
 
 // ============================================================================
@@ -609,56 +609,6 @@ impl MetavisorMcpServer {
 
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
-
-    // ========================================================================
-    // Lineage Tools
-    // ========================================================================
-
-    /// Get upstream (input) lineage for a data entity.
-    #[tool(
-        name = "get_upstream_lineage",
-        description = "Get the upstream (input) lineage for a data entity. Shows all data sources that contribute to this entity, tracing back through the data flow."
-    )]
-    async fn get_upstream_lineage(
-        &self,
-        Parameters(args): Parameters<GetLineageArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let options = LineageQueryOptions::new().with_depth(args.depth.unwrap_or(3));
-
-        let result = self
-            .state
-            .store
-            .get_lineage(&args.guid, TraversalDirection::Input, options)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(
-            format_lineage_result(&result),
-        )]))
-    }
-
-    /// Get downstream (output) lineage for a data entity.
-    #[tool(
-        name = "get_downstream_lineage",
-        description = "Get the downstream (output) lineage for a data entity. Shows all entities that depend on or are derived from this entity."
-    )]
-    async fn get_downstream_lineage(
-        &self,
-        Parameters(args): Parameters<GetLineageArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let options = LineageQueryOptions::new().with_depth(args.depth.unwrap_or(3));
-
-        let result = self
-            .state
-            .store
-            .get_lineage(&args.guid, TraversalDirection::Output, options)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(
-            format_lineage_result(&result),
-        )]))
-    }
 }
 
 // ============================================================================
@@ -852,7 +802,7 @@ pub struct AttributeDefArgs {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CreateRelationshipArgs {
     #[schemars(
-        description = "The relationship type name (e.g., 'table_columns', 'process_inputs')"
+        description = "The relationship type name (e.g., 'table_columns', 'join_relationship')"
     )]
     pub type_name: String,
     #[schemars(description = "Type name of the first endpoint entity")]
@@ -903,18 +853,6 @@ pub struct ListRelationshipsByEntityArgs {
 pub struct ListRelationshipsByTypeArgs {
     #[schemars(description = "The relationship type name to filter by")]
     pub type_name: String,
-}
-
-// ============================================================================
-// Lineage Tool Argument Types
-// ============================================================================
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GetLineageArgs {
-    #[schemars(description = "The GUID of the entity to trace lineage for")]
-    pub guid: String,
-    #[schemars(description = "Maximum depth to traverse (default: 3)")]
-    pub depth: Option<usize>,
 }
 
 // ============================================================================
@@ -1106,69 +1044,6 @@ fn format_relationship(r: &Relationship) -> String {
     }
 
     result
-}
-
-fn format_lineage_result(result: &metavisor_core::LineageResult) -> String {
-    let mut output = format!(
-        "# Lineage Result\n**Root Entity:** {}\n**Direction:** {}\n**Depth:** {}\n**Nodes:** {}\n**Edges:** {}\n",
-        result.root_guid,
-        result.direction,
-        result.depth,
-        result.nodes.len(),
-        result.edges.len()
-    );
-
-    // Format nodes
-    if !result.nodes.is_empty() {
-        output.push_str("\n## Nodes\n");
-        for node in &result.nodes {
-            let name = node.display_name.as_deref().unwrap_or("unnamed");
-            output.push_str(&format!(
-                "- **{}** ({}) - GUID: {}\n",
-                name, node.entity_type, node.id
-            ));
-
-            // Show classifications
-            if !node.classifications.is_empty() {
-                output.push_str(&format!(
-                    "  - Classifications: {}\n",
-                    node.classifications.join(", ")
-                ));
-            }
-
-            // Show propagated classifications
-            if !node.propagated_classifications.is_empty() {
-                let propagated: Vec<_> = node.propagated_classifications.iter().cloned().collect();
-                output.push_str(&format!("  - Propagated: {}\n", propagated.join(", ")));
-            }
-        }
-    }
-
-    // Format edges
-    if !result.edges.is_empty() {
-        output.push_str("\n## Relationships\n");
-        for edge in &result.edges {
-            let label = edge
-                .label
-                .as_deref()
-                .map(|l| format!(" [{}]", l))
-                .unwrap_or_default();
-            output.push_str(&format!(
-                "- {}{}: {} -> {}\n",
-                edge.relationship_type, label, edge.from_guid, edge.to_guid
-            ));
-        }
-    }
-
-    // Show adjacency summary for graph visualization
-    if !result.adjacency.is_empty() {
-        output.push_str("\n## Graph Structure\n");
-        for (from, to_list) in &result.adjacency {
-            output.push_str(&format!("{} -> [{}]\n", from, to_list.join(", ")));
-        }
-    }
-
-    output
 }
 
 // ============================================================================

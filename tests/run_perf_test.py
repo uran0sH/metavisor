@@ -250,7 +250,6 @@ def prepare_data(
     
     runner.create_entities()
     runner.create_relationships()
-    runner.create_lineage_relationships()
     
     # Get a relationship GUID for read testing
     relationship_guid = runner.relationship_guids[0] if runner.relationship_guids else None

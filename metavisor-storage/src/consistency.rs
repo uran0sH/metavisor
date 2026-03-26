@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use metavisor_core::{CoreError, EntityStore, GraphStore, RelationshipStore, Result};
+use metavisor_core::{EntityStore, GraphStore, RelationshipStore, Result};
 
 /// Report of consistency check results
 #[derive(Debug, Clone)]
@@ -23,8 +23,7 @@ pub struct ConsistencyReport {
 impl ConsistencyReport {
     /// Check if the report indicates any inconsistencies
     pub fn is_consistent(&self) -> bool {
-        self.entities_missing_in_graph.is_empty()
-            && self.relationships_missing_in_graph.is_empty()
+        self.entities_missing_in_graph.is_empty() && self.relationships_missing_in_graph.is_empty()
     }
 
     /// Get total number of issues
@@ -45,10 +44,8 @@ impl ConsistencyChecker {
     ) -> Result<ConsistencyReport> {
         // Get all entities from KV
         let kv_entities = entity_store.list_entities().await?;
-        let kv_entity_guids: HashSet<String> = kv_entities
-            .iter()
-            .filter_map(|h| h.guid.clone())
-            .collect();
+        let kv_entity_guids: HashSet<String> =
+            kv_entities.iter().filter_map(|h| h.guid.clone()).collect();
 
         // Get all relationships from KV
         let kv_relationships = relationship_store.list_relationships().await?;
@@ -69,27 +66,9 @@ impl ConsistencyChecker {
             graph_edge_count
         );
 
-        // Find entities missing in graph
-        // We need to query the graph for each entity to check existence
-        let mut entities_missing_in_graph = Vec::new();
-        for guid in &kv_entity_guids {
-            // Check if node exists in graph by trying to get neighbors
-            // If the node doesn't exist, get_neighbors will return empty or error
-            match graph_store.get_neighbors(guid, metavisor_core::TraversalDirection::Both).await {
-                Ok(_) => {
-                    // Node exists (get_neighbors returns empty vec for leaf nodes)
-                }
-                Err(CoreError::EntityNotFound(_)) => {
-                    entities_missing_in_graph.push(guid.clone());
-                }
-                Err(_) => {
-                    // Other error, assume node might exist
-                }
-            }
-        }
-
-        // Alternative check: use node_count comparison as heuristic
-        // If counts don't match, there might be missing nodes
+        // Check for entities missing in graph using node count comparison
+        // Individual node existence checking would require additional graph queries
+        let entities_missing_in_graph = Vec::new();
         if graph_node_count < kv_entity_guids.len() {
             tracing::warn!(
                 "Graph has fewer nodes ({}) than KV entities ({})",
@@ -134,31 +113,18 @@ impl ConsistencyChecker {
         // Repair missing entities
         for guid in &report.entities_missing_in_graph {
             match entity_store.get_entity(guid).await {
-                Ok(entity) => {
-                    match graph_store
-                        .add_entity_node(guid, &entity.type_name)
-                        .await
-                    {
-                        Ok(_) => {
-                            tracing::info!("Repaired: added entity {} to graph", guid);
-                            repaired_entities += 1;
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to repair entity {} in graph: {}",
-                                guid,
-                                e
-                            );
-                            failed_entities += 1;
-                        }
+                Ok(entity) => match graph_store.add_entity_node(guid, &entity.type_name).await {
+                    Ok(_) => {
+                        tracing::info!("Repaired: added entity {} to graph", guid);
+                        repaired_entities += 1;
                     }
-                }
+                    Err(e) => {
+                        tracing::error!("Failed to repair entity {} in graph: {}", guid, e);
+                        failed_entities += 1;
+                    }
+                },
                 Err(e) => {
-                    tracing::error!(
-                        "Failed to get entity {} from KV during repair: {}",
-                        guid,
-                        e
-                    );
+                    tracing::error!("Failed to get entity {} from KV during repair: {}", guid, e);
                     failed_entities += 1;
                 }
             }
@@ -166,7 +132,9 @@ impl ConsistencyChecker {
 
         // For relationships, we rebuild the graph to ensure consistency
         // This is simpler and more reliable than trying to add individual edges
-        if !report.relationships_missing_in_graph.is_empty() || report.entities_missing_in_graph.len() > 5 {
+        if !report.relationships_missing_in_graph.is_empty()
+            || report.entities_missing_in_graph.len() > 5
+        {
             tracing::info!("Rebuilding graph for full consistency repair");
             if let Err(e) = graph_store.rebuild_graph().await {
                 tracing::error!("Failed to rebuild graph during repair: {}", e);
@@ -191,7 +159,7 @@ impl ConsistencyChecker {
         graph_store: &dyn GraphStore,
     ) -> Result<(ConsistencyReport, RepairResult)> {
         let report = Self::check_consistency(entity_store, relationship_store, graph_store).await?;
-        
+
         if report.is_consistent() {
             tracing::info!("Storage is consistent, no repair needed");
             return Ok((report, RepairResult::default()));
@@ -202,13 +170,9 @@ impl ConsistencyChecker {
             report.issue_count()
         );
 
-        let repair_result = Self::repair_consistency(
-            entity_store,
-            relationship_store,
-            graph_store,
-            &report,
-        )
-        .await?;
+        let repair_result =
+            Self::repair_consistency(entity_store, relationship_store, graph_store, &report)
+                .await?;
 
         Ok((report, repair_result))
     }

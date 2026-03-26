@@ -255,23 +255,35 @@ impl TransactionManager {
                     vec![format!("Failed to mark transaction aborted: {err}")],
                 ),
             },
-            RecoveryAction::CommitAndProject => match self.apply_ops(&meta.tx_id, false, true).await {
-                Ok(ops) => {
-                    let mut errors = Vec::new();
-                    if let Err(err) = self.wal.mark_committed(&meta.tx_id).await {
-                        errors.push(format!("Failed to mark committed: {err}"));
+            RecoveryAction::CommitAndProject => {
+                match self.apply_ops(&meta.tx_id, false, true).await {
+                    Ok(ops) => {
+                        let mut errors = Vec::new();
+                        if let Err(err) = self.wal.mark_committed(&meta.tx_id).await {
+                            errors.push(format!("Failed to mark committed: {err}"));
+                        }
+                        if let Err(err) = self.wal.mark_graph_applied(&meta.tx_id).await {
+                            errors.push(format!("Failed to mark graph applied: {err}"));
+                        }
+                        if errors.is_empty() {
+                            RecoveryResult::success(
+                                meta.tx_id,
+                                RecoveryAction::CommitAndProject,
+                                ops,
+                            )
+                        } else {
+                            RecoveryResult::failed(
+                                meta.tx_id,
+                                RecoveryAction::CommitAndProject,
+                                errors,
+                            )
+                        }
                     }
-                    if let Err(err) = self.wal.mark_graph_applied(&meta.tx_id).await {
-                        errors.push(format!("Failed to mark graph applied: {err}"));
-                    }
-                    if errors.is_empty() {
-                        RecoveryResult::success(meta.tx_id, RecoveryAction::CommitAndProject, ops)
-                    } else {
+                    Err(errors) => {
                         RecoveryResult::failed(meta.tx_id, RecoveryAction::CommitAndProject, errors)
                     }
                 }
-                Err(errors) => RecoveryResult::failed(meta.tx_id, RecoveryAction::CommitAndProject, errors),
-            },
+            }
             RecoveryAction::ProjectOnly => match self.apply_ops(&meta.tx_id, false, true).await {
                 Ok(ops) => match self.wal.mark_graph_applied(&meta.tx_id).await {
                     Ok(()) => RecoveryResult::success(meta.tx_id, RecoveryAction::ProjectOnly, ops),
@@ -281,7 +293,9 @@ impl TransactionManager {
                         vec![format!("Failed to mark graph applied: {err}")],
                     ),
                 },
-                Err(errors) => RecoveryResult::failed(meta.tx_id, RecoveryAction::ProjectOnly, errors),
+                Err(errors) => {
+                    RecoveryResult::failed(meta.tx_id, RecoveryAction::ProjectOnly, errors)
+                }
             },
             RecoveryAction::NoAction => {
                 RecoveryResult::success(meta.tx_id, RecoveryAction::NoAction, 0)
@@ -309,7 +323,11 @@ impl TransactionManager {
             if result.is_success() {
                 tracing::info!("Recovered transaction {}", result.tx_id);
             } else {
-                tracing::error!("Failed to recover transaction {}: {:?}", result.tx_id, result.errors);
+                tracing::error!(
+                    "Failed to recover transaction {}: {:?}",
+                    result.tx_id,
+                    result.errors
+                );
             }
             results.push(result);
         }
@@ -500,7 +518,11 @@ impl InitializationResult {
     }
 
     pub fn total_changes(&self) -> usize {
-        let wal_changes: usize = self.wal_recovery.iter().map(|r| r.operations_recovered).sum();
+        let wal_changes: usize = self
+            .wal_recovery
+            .iter()
+            .map(|r| r.operations_recovered)
+            .sum();
         wal_changes + self.repair_result.total_repaired()
     }
 

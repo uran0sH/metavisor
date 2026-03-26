@@ -21,7 +21,7 @@ pub use grafeo_graph_store::GrafeoGraphStore;
 pub use kv::KvStore;
 pub use metavisor_store::DefaultMetavisorStore;
 pub use relationship_store::KvRelationshipStore;
-pub use transaction::{InitializationResult, RecoveryResult, TransactionManager, RecoveryStats};
+pub use transaction::{InitializationResult, RecoveryResult, RecoveryStats, TransactionManager};
 pub use type_store::KvTypeStore;
 pub use wal::{OpType, Transaction, TxMeta, TxOpRecord, TxState, WriteAheadLog};
 

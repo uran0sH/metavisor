@@ -5,8 +5,7 @@
 use async_trait::async_trait;
 use std::any::Any;
 
-use super::types::{LineageNode, LineageQueryOptions, LineageResult, TraversalDirection};
-use crate::{Classification, Result};
+use crate::Result;
 
 /// GraphStore trait for graph-based operations
 ///
@@ -62,37 +61,6 @@ pub trait GraphStore: Send + Sync + Any {
     ///
     /// This is called when a relationship is deleted.
     async fn remove_relationship_edge(&self, relationship_guid: &str) -> Result<()>;
-
-    /// Get lineage (upstream or downstream) for an entity
-    ///
-    /// Returns all nodes and edges within the specified depth.
-    async fn get_lineage(
-        &self,
-        entity_guid: &str,
-        direction: TraversalDirection,
-        options: LineageQueryOptions,
-    ) -> Result<LineageResult>;
-
-    /// Get all classifications for an entity (direct + propagated)
-    ///
-    /// This computes propagated classifications based on the graph structure
-    /// and the propagate_tags settings on relationships.
-    async fn get_all_classifications(&self, entity_guid: &str) -> Result<Vec<Classification>>;
-
-    /// Get immediate neighbors (BFS depth=1)
-    ///
-    /// Returns entities directly connected to the given entity.
-    async fn get_neighbors(
-        &self,
-        entity_guid: &str,
-        direction: TraversalDirection,
-    ) -> Result<Vec<LineageNode>>;
-
-    /// Check if a path exists between two entities
-    ///
-    /// Uses BFS to find if there's any path from `from_guid` to `to_guid`
-    /// within the specified maximum depth.
-    async fn path_exists(&self, from_guid: &str, to_guid: &str, max_depth: usize) -> Result<bool>;
 
     /// Get the total number of nodes in the graph
     fn node_count(&self) -> usize;

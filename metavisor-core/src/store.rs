@@ -3,7 +3,6 @@
 use async_trait::async_trait;
 
 use crate::{
-    graph::{LineageQueryOptions, LineageResult, TraversalDirection},
     Classification, Entity, EntityHeader, Relationship, RelationshipHeader, Result, TypeDef,
 };
 
@@ -278,24 +277,6 @@ pub trait MetavisorStore: Send + Sync {
     async fn list_relationships(&self) -> Result<Vec<RelationshipHeader>>;
 
     // ========================================================================
-    // Graph / Lineage Operations
-    // ========================================================================
-
-    /// Build or rebuild the in-memory graph from persisted data
-    async fn rebuild_graph(&self) -> Result<()>;
-
-    /// Get lineage for an entity
-    async fn get_lineage(
-        &self,
-        entity_guid: &str,
-        direction: TraversalDirection,
-        options: LineageQueryOptions,
-    ) -> Result<LineageResult>;
-
-    /// Get all classifications for an entity (direct + propagated)
-    async fn get_all_classifications(&self, entity_guid: &str) -> Result<Vec<Classification>>;
-
-    // ========================================================================
     // Classification Operations
     // ========================================================================
 
@@ -322,16 +303,6 @@ pub trait MetavisorStore: Send + Sync {
         entity_guid: &str,
         classification_name: &str,
     ) -> Result<()>;
-
-    /// Get immediate neighbors
-    async fn get_neighbors(
-        &self,
-        entity_guid: &str,
-        direction: TraversalDirection,
-    ) -> Result<Vec<crate::graph::LineageNode>>;
-
-    /// Check if a path exists between two entities
-    async fn path_exists(&self, from_guid: &str, to_guid: &str, max_depth: usize) -> Result<bool>;
 
     /// Get graph statistics
     fn graph_stats(&self) -> GraphStats;

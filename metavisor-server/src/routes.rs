@@ -11,15 +11,13 @@ use metavisor_core::MetavisorStore;
 use crate::handlers::{
     add_classifications, basic_search, create_entities, create_entity, create_relationship,
     create_types, delete_entity_by_guid, delete_relationship_by_guid,
-    delete_relationship_def_by_name, delete_type_by_name, delete_types, get_all_classifications,
-    get_all_types, get_classifications, get_entity_by_guid, get_entity_by_unique_attribute,
-    get_graph_stats, get_input_lineage, get_lineage_by_unique_attribute, get_lineage_graph,
-    get_output_lineage, get_relationship_by_guid, get_relationship_def_by_name, get_type_by_guid,
-    get_type_by_name, list_relationship_defs, list_relationships_by_entity,
-    list_relationships_by_type, list_type_headers, rebuild_graph, remove_classification,
-    search_relations, update_classifications, update_entity, update_relationship, update_types,
-    ClassificationAppState, EntityAppState, GraphAppState, MetavisorAppState, RelationshipAppState,
-    SearchAppState,
+    delete_relationship_def_by_name, delete_type_by_name, delete_types, get_all_types,
+    get_classifications, get_entity_by_guid, get_entity_by_unique_attribute,
+    get_relationship_by_guid, get_relationship_def_by_name, get_type_by_guid, get_type_by_name,
+    list_relationship_defs, list_relationships_by_entity, list_relationships_by_type,
+    list_type_headers, remove_classification, search_relations, update_classifications,
+    update_entity, update_relationship, update_types, ClassificationAppState, EntityAppState,
+    MetavisorAppState, RelationshipAppState, SearchAppState,
 };
 use crate::mcp::{McpHttpService, McpState};
 
@@ -33,9 +31,6 @@ pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
         store: store.clone(),
     };
     let relationship_state = RelationshipAppState {
-        store: store.clone(),
-    };
-    let graph_state = GraphAppState {
         store: store.clone(),
     };
     let classification_state = ClassificationAppState {
@@ -167,41 +162,10 @@ pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
             "/api/metavisor/v1/search/relations",
             post(search_relations).with_state(search_state),
         )
-        // Lineage endpoints (Atlas-compatible)
-        .route(
-            "/api/metavisor/v1/lineage/{guid}",
-            get(get_lineage_graph).with_state(graph_state.clone()),
-        )
-        .route(
-            "/api/metavisor/v1/lineage/uniqueAttribute/type/{type}",
-            get(get_lineage_by_unique_attribute).with_state(graph_state.clone()),
-        )
-        // Convenience endpoints for input/output lineage
-        .route(
-            "/api/metavisor/v1/lineage/{guid}/inputs",
-            get(get_input_lineage).with_state(graph_state.clone()),
-        )
-        .route(
-            "/api/metavisor/v1/lineage/{guid}/outputs",
-            get(get_output_lineage).with_state(graph_state.clone()),
-        )
-        // Graph management
-        .route(
-            "/api/metavisor/v1/graph/rebuild",
-            post(rebuild_graph).with_state(graph_state.clone()),
-        )
-        .route(
-            "/api/metavisor/v1/graph/stats",
-            get(get_graph_stats).with_state(graph_state.clone()),
-        )
         // Classification management (Atlas-compatible)
         .route(
             "/api/metavisor/v1/entity/guid/{guid}/classifications",
             get(get_classifications).with_state(classification_state.clone()),
-        )
-        .route(
-            "/api/metavisor/v1/entity/guid/{guid}/classifications/all",
-            get(get_all_classifications).with_state(classification_state.clone()),
         )
         .route(
             "/api/metavisor/v1/entity/guid/{guid}/classifications",

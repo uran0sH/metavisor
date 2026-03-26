@@ -30,17 +30,6 @@ pub async fn get_classifications(
     Ok(Json(classifications))
 }
 
-/// Get all classifications for an entity (including propagated)
-///
-/// GET /v2/entity/guid/{guid}/classifications/all
-pub async fn get_all_classifications(
-    State(state): State<ClassificationAppState>,
-    Path(guid): Path<String>,
-) -> Result<Json<Vec<Classification>>> {
-    let classifications = state.store.get_all_classifications(&guid).await?;
-    Ok(Json(classifications))
-}
-
 /// Add classifications to an entity
 ///
 /// POST /v2/entity/guid/{guid}/classifications

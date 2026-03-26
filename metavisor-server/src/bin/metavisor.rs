@@ -1,7 +1,6 @@
 //! Metavisor server entry point
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use clap::Parser;
@@ -31,10 +30,6 @@ struct Args {
     #[arg(long, default_value = "./data/wal")]
     wal_data_dir: String,
 
-    /// Background propagation interval in seconds (0 to disable)
-    #[arg(long, default_value_t = 30)]
-    propagation_interval: u64,
-
     /// Enable WAL (Write Ahead Log) for cross-storage transactions
     #[arg(long, default_value_t = true)]
     enable_wal: bool,
@@ -54,7 +49,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Log graph store type
-    tracing::info!("Using graph store: {}", metavisor_storage::graph_store_type());
+    tracing::info!(
+        "Using graph store: {}",
+        metavisor_storage::graph_store_type()
+    );
 
     // Initialize storage
     tracing::info!("Opening storage at {}", args.data_dir);
@@ -115,11 +113,6 @@ async fn main() -> anyhow::Result<()> {
             tracing::error!("Failed to initialize storage: {}", e);
             // Continue anyway - the system may still be functional
         }
-    }
-
-    // Spawn background classification propagation task
-    if args.propagation_interval > 0 {
-        graph_store.spawn_background_propagation(Some(Duration::from_secs(args.propagation_interval)));
     }
 
     // Create router

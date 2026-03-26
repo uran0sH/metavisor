@@ -11,7 +11,6 @@
 //!   -d, --data-dir <DIR>  Data directory for storage [default: ./data]
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use clap::Parser;
 use metavisor_server::mcp::MetavisorMcpServer;
@@ -33,10 +32,6 @@ struct Args {
     /// Graph data directory (for Grafeo)
     #[arg(long, default_value = "./data/graph")]
     graph_data_dir: String,
-
-    /// Background propagation interval in seconds (0 to disable)
-    #[arg(long, default_value_t = 30)]
-    propagation_interval: u64,
 }
 
 #[tokio::main]
@@ -54,7 +49,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     tracing::info!("Starting Metavisor MCP Server (stdio mode)");
-    tracing::info!("Using graph store: {}", metavisor_storage::graph_store_type());
+    tracing::info!(
+        "Using graph store: {}",
+        metavisor_storage::graph_store_type()
+    );
     tracing::info!("Opening storage at {}", args.data_dir);
 
     // Initialize storage
@@ -80,11 +78,6 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize graph from persisted data
     store.initialize().await?;
-
-    // Spawn background classification propagation task
-    if args.propagation_interval > 0 {
-        graph_store.spawn_background_propagation(Some(Duration::from_secs(args.propagation_interval)));
-    }
 
     // Create the MCP server
     let server = MetavisorMcpServer::new(metavisor_server::mcp::McpState { store });

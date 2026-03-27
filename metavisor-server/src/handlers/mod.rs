@@ -1,5 +1,6 @@
 //! API handlers
 
+pub mod admin;
 pub mod classification;
 pub mod entity;
 
@@ -11,6 +12,7 @@ use std::sync::Arc;
 
 use metavisor_core::MetavisorStore;
 
+pub use admin::*;
 pub use classification::*;
 pub use entity::*;
 

@@ -7,7 +7,7 @@ use clap::Parser;
 use metavisor_server::create_router;
 use metavisor_storage::{
     DefaultMetavisorStore, GrafeoGraphStore, KvEntityStore, KvRelationshipStore, KvStore,
-    KvTypeStore, WriteAheadLog,
+    KvTypeStore,
 };
 
 #[derive(Parser, Debug)]
@@ -25,14 +25,6 @@ struct Args {
     /// Graph data directory (for Grafeo)
     #[arg(long, default_value = "./data/graph")]
     graph_data_dir: String,
-
-    /// WAL data directory (for transaction logs)
-    #[arg(long, default_value = "./data/wal")]
-    wal_data_dir: String,
-
-    /// Enable WAL (Write Ahead Log) for cross-storage transactions
-    #[arg(long, default_value_t = true)]
-    enable_wal: bool,
 }
 
 #[tokio::main]
@@ -72,28 +64,12 @@ async fn main() -> anyhow::Result<()> {
         relationship_store.clone(),
     )?);
 
-    // Create unified MetavisorStore (with WAL if enabled)
-    let store = if args.enable_wal {
-        tracing::info!("WAL enabled for cross-storage transactions");
-        tracing::info!("Opening WAL storage at {}", args.wal_data_dir);
-        let wal_store = KvStore::open(&args.wal_data_dir)?;
-        let wal = Arc::new(WriteAheadLog::new(wal_store));
-        Arc::new(DefaultMetavisorStore::with_wal(
-            type_store,
-            entity_store,
-            relationship_store,
-            graph_store.clone(),
-            wal,
-        ))
-    } else {
-        tracing::info!("WAL disabled, using legacy transaction mode");
-        Arc::new(DefaultMetavisorStore::new(
-            type_store,
-            entity_store,
-            relationship_store,
-            graph_store.clone(),
-        ))
-    };
+    let store = Arc::new(DefaultMetavisorStore::new(
+        type_store,
+        entity_store,
+        relationship_store,
+        graph_store.clone(),
+    ));
 
     // Initialize with recovery (WAL + consistency check)
     tracing::info!("Initializing storage with recovery...");
@@ -101,8 +77,7 @@ async fn main() -> anyhow::Result<()> {
         Ok(result) => {
             if result.had_changes() {
                 tracing::info!(
-                    "Recovery completed: {} WAL transactions, {} items repaired. Propagation pending.",
-                    result.wal_recovery.len(),
+                    "Recovery completed: {} items repaired. Propagation pending.",
                     result.total_changes()
                 );
             } else {

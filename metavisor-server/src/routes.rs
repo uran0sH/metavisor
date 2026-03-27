@@ -7,39 +7,46 @@ use axum::{
 use std::sync::Arc;
 
 use metavisor_core::MetavisorStore;
+use metavisor_storage::DefaultMetavisorStore;
 
 use crate::handlers::{
     add_classifications, basic_search, create_entities, create_entity, create_relationship,
     create_types, delete_entity_by_guid, delete_relationship_by_guid,
     delete_relationship_def_by_name, delete_type_by_name, delete_types, get_all_types,
     get_classifications, get_entity_by_guid, get_entity_by_unique_attribute,
-    get_relationship_by_guid, get_relationship_def_by_name, get_type_by_guid, get_type_by_name,
-    list_relationship_defs, list_relationships_by_entity, list_relationships_by_type,
-    list_type_headers, remove_classification, search_relations, update_classifications,
-    update_entity, update_relationship, update_types, ClassificationAppState, EntityAppState,
-    MetavisorAppState, RelationshipAppState, SearchAppState,
+    get_relationship_by_guid, get_relationship_def_by_name, get_storage_status, get_type_by_guid,
+    get_type_by_name, list_relationship_defs, list_relationships_by_entity,
+    list_relationships_by_type, list_type_headers, remove_classification, repair_storage,
+    search_relations, update_classifications, update_entity, update_relationship, update_types,
+    AdminAppState, ClassificationAppState, EntityAppState, MetavisorAppState, RelationshipAppState,
+    SearchAppState,
 };
 use crate::mcp::{McpHttpService, McpState};
 
 /// Create the API router
-pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
+pub fn create_router(store: Arc<DefaultMetavisorStore>) -> Router {
+    let store_dyn: Arc<dyn MetavisorStore> = store.clone();
+
     // Create type-specific states for handlers
     let type_state = MetavisorAppState {
-        store: store.clone(),
+        store: store_dyn.clone(),
     };
     let entity_state = EntityAppState {
-        store: store.clone(),
+        store: store_dyn.clone(),
     };
     let relationship_state = RelationshipAppState {
-        store: store.clone(),
+        store: store_dyn.clone(),
     };
     let classification_state = ClassificationAppState {
-        store: store.clone(),
+        store: store_dyn.clone(),
     };
     let search_state = SearchAppState {
+        store: store_dyn.clone(),
+    };
+    let admin_state = AdminAppState {
         store: store.clone(),
     };
-    let mcp_state = McpState { store };
+    let mcp_state = McpState { store: store_dyn };
 
     // Create MCP HTTP service with proper session management
     let mcp_service = McpHttpService::new(mcp_state);
@@ -48,6 +55,16 @@ pub fn create_router(store: Arc<dyn MetavisorStore>) -> Router {
         // Health check
         .route("/health", get(health))
         .route("/api/metavisor/v1", get(api_info))
+        .route(
+            "/admin/storage/status",
+            get(get_storage_status).with_state(admin_state),
+        )
+        .route(
+            "/admin/storage/repair",
+            post(repair_storage).with_state(AdminAppState {
+                store: store.clone(),
+            }),
+        )
         // MCP endpoint
         .route("/mcp", post(handle_mcp).with_state(mcp_service.clone()))
         .route(

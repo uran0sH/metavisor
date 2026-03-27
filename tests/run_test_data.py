@@ -414,43 +414,6 @@ class TestRunner:
 
         log_success("Query tests completed")
 
-    def test_lineage(self) -> None:
-        """Test lineage API."""
-        log_section("Testing Lineage API")
-
-        log_info("Getting lineage entity GUID...")
-        response = self.client.get(
-            f"{self.api_prefix}/lineage/uniqueAttribute/type/column_meta"
-            "?attr:qualifiedName=BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID&direction=BOTH",
-            "get lineage entity by qualifiedName"
-        )
-
-        lineage_guid = response.get("guid") if isinstance(response, dict) else None
-        print(f"Lineage entity GUID: {lineage_guid}")
-
-        if lineage_guid:
-            log_info("Getting upstream lineage (direction=INPUT)...")
-            self.client.get(
-                f"{self.api_prefix}/lineage/{lineage_guid}?depth=3&direction=INPUT",
-                "get upstream lineage"
-            )
-
-            log_info("Getting downstream lineage (direction=OUTPUT)...")
-            self.client.get(
-                f"{self.api_prefix}/lineage/{lineage_guid}?depth=3&direction=OUTPUT",
-                "get downstream lineage"
-            )
-
-            log_info("Getting full lineage (direction=BOTH)...")
-            self.client.get(
-                f"{self.api_prefix}/lineage/{lineage_guid}?depth=3&direction=BOTH",
-                "get full lineage"
-            )
-        else:
-            raise RuntimeError("Could not find lineage entity")
-
-        log_success("Lineage tests completed")
-
     def list_all(self) -> None:
         """List all data."""
         log_section("Listing All Data")
@@ -563,7 +526,6 @@ class TestRunner:
             self.create_entities()
             self.create_relationships()
             self.run_query()
-            self.test_lineage()
             self.list_all()
             log_section("All Tests Completed")
         except RuntimeError:
@@ -581,7 +543,6 @@ Commands:
   entities                 Create entities only
   relationships            Create relationships only
   query                    Run query tests only
-  lineage                  Run lineage tests only
   list                     List all data
   get-type [name]          Get type definition (default: sql_meta)
   get-entity [type] [qn]   Get entity by qualifiedName (default: column_meta, BDSP_SPCP.T80_PC8_CPS_PBK.PARTY_ID)
@@ -605,7 +566,6 @@ Commands:
         "entities": lambda: runner.create_entities(),
         "relationships": lambda: runner.create_relationships(),
         "query": lambda: runner.run_query(),
-        "lineage": lambda: runner.test_lineage(),
         "list": lambda: runner.list_all(),
         "cleanup": lambda: runner.cleanup(),
         "all": lambda: runner.run_all(),

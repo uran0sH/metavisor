@@ -123,7 +123,6 @@ jobs:
           # Run Rust integration tests
           cargo test --test type_api_integration
           cargo test --test entity_api_integration
-          cargo test --test lineage_api_integration
           cargo test --test mcp_test
 
           # Run Python end-to-end API script

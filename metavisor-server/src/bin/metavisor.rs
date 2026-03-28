@@ -58,11 +58,8 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // Create Grafeo graph store wrapped in Arc
-    let graph_store: Arc<GrafeoGraphStore> = Arc::new(GrafeoGraphStore::open(
-        &args.graph_data_dir,
-        entity_store.clone(),
-        relationship_store.clone(),
-    )?);
+    let graph_store: Arc<GrafeoGraphStore> =
+        Arc::new(GrafeoGraphStore::open(&args.graph_data_dir)?);
 
     let store = Arc::new(DefaultMetavisorStore::new(
         type_store,

@@ -4,8 +4,7 @@
 //! projection that is rebuilt or repaired from KV data as needed.
 
 use async_trait::async_trait;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -40,6 +39,43 @@ struct MaintenanceTask {
     handle: JoinHandle<()>,
 }
 
+/// Tracks graph projection failures by type and GUID.
+struct FailedProjections {
+    failed_entity_guids: HashSet<String>,
+    failed_relationship_guids: HashSet<String>,
+}
+
+impl FailedProjections {
+    fn new() -> Self {
+        Self {
+            failed_entity_guids: HashSet::new(),
+            failed_relationship_guids: HashSet::new(),
+        }
+    }
+
+    fn record(&mut self, subject_type: &str, guid: &str) {
+        match subject_type {
+            "entity" => {
+                self.failed_entity_guids.insert(guid.to_string());
+            }
+            "relationship" => {
+                self.failed_relationship_guids.insert(guid.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.failed_entity_guids.len() + self.failed_relationship_guids.len()
+    }
+
+    fn take(&mut self) -> (Vec<String>, Vec<String>) {
+        let entities = self.failed_entity_guids.drain().collect();
+        let relationships = self.failed_relationship_guids.drain().collect();
+        (entities, relationships)
+    }
+}
+
 /// DefaultMetavisorStore - Default implementation of MetavisorStore.
 ///
 /// Main data is stored in KV-backed stores. Graph updates happen as a
@@ -51,8 +87,8 @@ pub struct DefaultMetavisorStore {
     graph_store: Arc<dyn GraphStore>,
     /// Blocks writes while startup rebuild/repair is running.
     write_barrier: Arc<RwLock<()>>,
-    /// Number of known graph projection failures awaiting repair.
-    pending_projection_repairs: Arc<AtomicUsize>,
+    /// Known graph projection failures awaiting repair.
+    failed_projections: Arc<Mutex<FailedProjections>>,
     /// Background repair task, if started.
     maintenance_task: Mutex<Option<MaintenanceTask>>,
 }
@@ -70,24 +106,16 @@ impl DefaultMetavisorStore {
             relationship_store,
             graph_store,
             write_barrier: Arc::new(RwLock::new(())),
-            pending_projection_repairs: Arc::new(AtomicUsize::new(0)),
+            failed_projections: Arc::new(Mutex::new(FailedProjections::new())),
             maintenance_task: Mutex::new(None),
         }
     }
 
-    /// Rebuild the graph projection from persisted KV data.
-    pub async fn initialize(&self) -> Result<()> {
-        self.graph_store.rebuild_graph().await
-    }
-
-    /// Rebuild and repair the graph projection from KV data on startup.
+    /// Check consistency and repair the graph projection from KV data on startup.
     pub async fn initialize_with_recovery(&self) -> Result<InitializationResult> {
         let _recovery_guard = self.write_barrier.write().await;
 
-        self.graph_store.rebuild_graph().await?;
         let (consistency_report, repair_result) = self.repair_consistency().await?;
-        self.pending_projection_repairs
-            .store(repair_result.total_failed(), Ordering::Relaxed);
 
         Ok(InitializationResult {
             consistency_report,
@@ -111,7 +139,7 @@ impl DefaultMetavisorStore {
 
         let interval_secs = repair_interval_minutes.unwrap_or(5) * 60;
         let write_barrier = Arc::clone(&self.write_barrier);
-        let pending_projection_repairs = Arc::clone(&self.pending_projection_repairs);
+        let failed_projections = Arc::clone(&self.failed_projections);
         let entity_store = Arc::clone(&self.entity_store);
         let relationship_store = Arc::clone(&self.relationship_store);
         let graph_store = Arc::clone(&self.graph_store);
@@ -129,21 +157,50 @@ impl DefaultMetavisorStore {
                     _ = ticker.tick() => {}
                 }
 
-                if pending_projection_repairs.load(Ordering::Relaxed) == 0 {
+                // Take the pending failures (drains the set)
+                let (failed_entities, failed_relationships) = {
+                    let mut fp = failed_projections
+                        .lock()
+                        .expect("failed_projections mutex poisoned");
+                    fp.take()
+                };
+
+                if failed_entities.is_empty() && failed_relationships.is_empty() {
                     continue;
                 }
 
                 let _repair_guard = write_barrier.write().await;
-                match crate::ConsistencyChecker::check_and_repair(
+
+                // Build a report from the known failed GUIDs and repair via ConsistencyChecker
+                let report = crate::consistency::ConsistencyReport {
+                    entities_missing_in_graph: failed_entities.clone(),
+                    relationships_missing_in_graph: failed_relationships.clone(),
+                    total_entities: failed_entities.len(),
+                    total_relationships: failed_relationships.len(),
+                };
+
+                match crate::consistency::ConsistencyChecker::repair_consistency(
                     entity_store.as_ref(),
                     relationship_store.as_ref(),
                     graph_store.as_ref(),
+                    &report,
                 )
                 .await
                 {
-                    Ok((_report, repair_result)) => {
-                        pending_projection_repairs
-                            .store(repair_result.total_failed(), Ordering::Relaxed);
+                    Ok(repair_result) => {
+                        // Re-queue items that still failed
+                        if repair_result.total_failed() > 0 {
+                            let mut fp = failed_projections
+                                .lock()
+                                .expect("failed_projections mutex poisoned");
+                            for guid in &failed_entities {
+                                fp.record("entity", guid);
+                            }
+                            for guid in &failed_relationships {
+                                fp.record("relationship", guid);
+                            }
+                        }
+
                         tracing::info!(
                             "Projection repair run completed: repaired={}, failed={}",
                             repair_result.total_repaired(),
@@ -152,6 +209,16 @@ impl DefaultMetavisorStore {
                     }
                     Err(err) => {
                         tracing::error!("Projection repair run failed: {}", err);
+                        // Re-queue all items for next round
+                        let mut fp = failed_projections
+                            .lock()
+                            .expect("failed_projections mutex poisoned");
+                        for guid in &failed_entities {
+                            fp.record("entity", guid);
+                        }
+                        for guid in &failed_relationships {
+                            fp.record("relationship", guid);
+                        }
                     }
                 }
             }
@@ -195,8 +262,6 @@ impl DefaultMetavisorStore {
             self.graph_store.as_ref(),
         )
         .await?;
-        self.pending_projection_repairs
-            .store(result.1.total_failed(), Ordering::Relaxed);
         Ok(result)
     }
 
@@ -205,7 +270,10 @@ impl DefaultMetavisorStore {
     }
 
     pub fn pending_projection_repairs(&self) -> usize {
-        self.pending_projection_repairs.load(Ordering::Relaxed)
+        self.failed_projections
+            .lock()
+            .expect("failed_projections mutex poisoned")
+            .len()
     }
 
     fn record_projection_failure(
@@ -215,15 +283,14 @@ impl DefaultMetavisorStore {
         subject_id: &str,
         error: &metavisor_core::CoreError,
     ) {
-        let queued = self
-            .pending_projection_repairs
-            .fetch_add(1, Ordering::Relaxed)
-            + 1;
+        self.failed_projections
+            .lock()
+            .expect("failed_projections mutex poisoned")
+            .record(subject_type, subject_id);
         tracing::error!(
             operation,
             subject_type,
             subject_id,
-            queued_projection_repairs = queued,
             error = %error,
             "Graph projection failed; queued for later repair"
         );
@@ -239,9 +306,16 @@ impl DefaultMetavisorStore {
         }
 
         for (entity, guid) in entities.iter().zip(&guids) {
+            let display_name = entity.attributes.get("name").and_then(|v| v.as_str());
+            let classifications: Vec<String> = entity
+                .classifications
+                .iter()
+                .map(|c| c.type_name.clone())
+                .collect();
+
             if let Err(err) = self
                 .graph_store
-                .add_entity_node(guid, &entity.type_name)
+                .add_entity_node(guid, &entity.type_name, display_name, classifications)
                 .await
             {
                 self.record_projection_failure("bulk_create", "entity", guid, &err);
@@ -323,9 +397,16 @@ impl MetavisorStore for DefaultMetavisorStore {
         let _write_guard = self.write_barrier.read().await;
         let guid = self.entity_store.create_entity(entity).await?;
 
+        let display_name = entity.attributes.get("name").and_then(|v| v.as_str());
+        let classifications: Vec<String> = entity
+            .classifications
+            .iter()
+            .map(|c| c.type_name.clone())
+            .collect();
+
         if let Err(err) = self
             .graph_store
-            .add_entity_node(&guid, &entity.type_name)
+            .add_entity_node(&guid, &entity.type_name, display_name, classifications)
             .await
         {
             self.record_projection_failure("create", "entity", &guid, &err);
@@ -376,7 +457,16 @@ impl MetavisorStore for DefaultMetavisorStore {
             if let Some(ref entity_guid) = entity.guid {
                 if let Err(err) = self
                     .graph_store
-                    .add_entity_node(entity_guid, &entity.type_name)
+                    .add_entity_node(
+                        entity_guid,
+                        &entity.type_name,
+                        entity.attributes.get("name").and_then(|v| v.as_str()),
+                        entity
+                            .classifications
+                            .iter()
+                            .map(|c| c.type_name.clone())
+                            .collect(),
+                    )
                     .await
                 {
                     self.record_projection_failure("update", "entity", entity_guid, &err);
@@ -482,9 +572,47 @@ impl MetavisorStore for DefaultMetavisorStore {
         self.relationship_store
             .update_relationship(relationship)
             .await?;
-        if let Err(err) = self.graph_store.rebuild_graph().await {
-            let guid = relationship.guid.as_deref().unwrap_or("");
+
+        let guid = relationship.guid.as_deref().unwrap_or("");
+        // Remove old edge, then add updated one
+        if let Err(err) = self.graph_store.remove_relationship_edge(guid).await {
             self.record_projection_failure("update", "relationship", guid, &err);
+            return Ok(());
+        }
+
+        let end1_guid = relationship
+            .end1
+            .as_ref()
+            .and_then(|e| e.guid.as_ref())
+            .map(|g| g.as_str());
+        let end2_guid = relationship
+            .end2
+            .as_ref()
+            .and_then(|e| e.guid.as_ref())
+            .map(|g| g.as_str());
+
+        match (end1_guid, end2_guid) {
+            (Some(from), Some(to)) => {
+                if let Err(err) = self
+                    .graph_store
+                    .add_relationship_edge(
+                        guid,
+                        &relationship.type_name,
+                        from,
+                        to,
+                        relationship.propagate_tags.unwrap_or_default(),
+                    )
+                    .await
+                {
+                    self.record_projection_failure("update", "relationship", guid, &err);
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    "Updated relationship {} has incomplete endpoint info, skipping graph update",
+                    guid
+                );
+            }
         }
         Ok(())
     }
@@ -626,10 +754,7 @@ mod tests {
         let type_store = Arc::new(KvTypeStore::new(kv.clone()));
         let entity_store = Arc::new(KvEntityStore::new(kv.clone(), type_store.clone()));
         let relationship_store = Arc::new(KvRelationshipStore::new(kv.clone(), type_store.clone()));
-        let graph_store: Arc<dyn GraphStore> = Arc::new(
-            GrafeoGraphStore::new_in_memory(entity_store.clone(), relationship_store.clone())
-                .unwrap(),
-        );
+        let graph_store: Arc<dyn GraphStore> = Arc::new(GrafeoGraphStore::new_in_memory().unwrap());
 
         (
             Arc::new(DefaultMetavisorStore::new(
@@ -707,7 +832,7 @@ mod tests {
 
         let result = store.initialize_with_recovery().await.unwrap();
 
-        assert!(result.consistency_report.is_consistent());
+        assert!(result.had_changes());
         assert!(store.entity_exists(&guid).await.unwrap());
         assert_eq!(store.graph_stats().node_count, 1);
     }

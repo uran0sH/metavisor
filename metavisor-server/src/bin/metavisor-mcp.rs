@@ -62,11 +62,8 @@ async fn main() -> anyhow::Result<()> {
     let relationship_store = Arc::new(KvRelationshipStore::new(kv_store, type_store.clone()));
 
     // Create Grafeo graph store wrapped in Arc
-    let graph_store: Arc<GrafeoGraphStore> = Arc::new(GrafeoGraphStore::open(
-        &args.graph_data_dir,
-        entity_store.clone(),
-        relationship_store.clone(),
-    )?);
+    let graph_store: Arc<GrafeoGraphStore> =
+        Arc::new(GrafeoGraphStore::open(&args.graph_data_dir)?);
 
     // Create unified MetavisorStore
     let store = Arc::new(DefaultMetavisorStore::new(
@@ -76,8 +73,8 @@ async fn main() -> anyhow::Result<()> {
         graph_store.clone(),
     ));
 
-    // Initialize graph from persisted data
-    store.initialize().await?;
+    // Initialize with consistency check and repair
+    store.initialize_with_recovery().await?;
 
     // Create the MCP server
     let server = MetavisorMcpServer::new(metavisor_server::mcp::McpState { store });

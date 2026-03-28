@@ -15,16 +15,17 @@ use crate::Result;
 pub trait GraphStore: Send + Sync + Any {
     /// Convert to Any for downcasting to concrete types
     fn as_any(&self) -> &dyn Any;
-    /// Build or rebuild the in-memory graph from persisted data
-    ///
-    /// This should be called on startup or when the graph needs to be
-    /// synchronized with the underlying storage.
-    async fn rebuild_graph(&self) -> Result<()>;
 
     /// Add an entity node to the graph
     ///
     /// This is called when a new entity is created.
-    async fn add_entity_node(&self, entity_guid: &str, entity_type: &str) -> Result<()>;
+    async fn add_entity_node(
+        &self,
+        entity_guid: &str,
+        entity_type: &str,
+        display_name: Option<&str>,
+        classifications: Vec<String>,
+    ) -> Result<()>;
 
     /// Remove an entity node from the graph
     ///
@@ -67,6 +68,12 @@ pub trait GraphStore: Send + Sync + Any {
 
     /// Get the total number of edges in the graph
     fn edge_count(&self) -> usize;
+
+    /// List all entity GUIDs present as nodes in the graph
+    fn list_node_guids(&self) -> Vec<String>;
+
+    /// List all relationship GUIDs present as edges in the graph
+    fn list_edge_guids(&self) -> Vec<String>;
 
     /// Check if the graph is empty
     fn is_empty(&self) -> bool {

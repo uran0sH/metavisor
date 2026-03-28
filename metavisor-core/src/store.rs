@@ -33,6 +33,24 @@ pub trait TypeStore: Send + Sync {
 
     /// List types by category
     async fn list_types_by_category(&self, category: crate::TypeCategory) -> Result<Vec<String>>;
+
+    /// Create multiple type definitions atomically.
+    /// Default implementation delegates to individual `create_type` calls.
+    async fn batch_create_types(&self, type_defs: &[TypeDef]) -> Result<()> {
+        for td in type_defs {
+            self.create_type(td).await?;
+        }
+        Ok(())
+    }
+
+    /// Update multiple type definitions atomically.
+    /// Default implementation delegates to individual `update_type` calls.
+    async fn batch_update_types(&self, type_defs: &[TypeDef]) -> Result<()> {
+        for td in type_defs {
+            self.update_type(td).await?;
+        }
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -212,6 +230,12 @@ pub trait MetavisorStore: Send + Sync {
 
     /// List all type names
     async fn list_types(&self) -> Result<Vec<String>>;
+
+    /// Create multiple type definitions atomically
+    async fn batch_create_types(&self, type_defs: &[TypeDef]) -> Result<()>;
+
+    /// Update multiple type definitions atomically
+    async fn batch_update_types(&self, type_defs: &[TypeDef]) -> Result<()>;
 
     // ========================================================================
     // Entity Operations (with Graph sync)

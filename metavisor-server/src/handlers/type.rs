@@ -86,50 +86,31 @@ pub async fn create_types(
     State(state): State<MetavisorAppState>,
     Json(req): Json<TypesDef>,
 ) -> Result<(StatusCode, Json<TypesDef>)> {
+    // Collect all type definitions for atomic batch creation
+    let all_types: Vec<TypeDef> = req
+        .entity_defs
+        .into_iter()
+        .map(TypeDef::from)
+        .chain(req.classification_defs.into_iter().map(TypeDef::from))
+        .chain(req.struct_defs.into_iter().map(TypeDef::from))
+        .chain(req.enum_defs.into_iter().map(TypeDef::from))
+        .chain(req.relationship_defs.into_iter().map(TypeDef::from))
+        .chain(req.business_metadata_defs.into_iter().map(TypeDef::from))
+        .collect();
+
+    // Create all types atomically
+    state.store.batch_create_types(&all_types).await?;
+
+    // Build response from the successfully created types
     let mut created = TypesDef::new();
-
-    // Create entity types
-    for entity_def in req.entity_defs {
-        let type_def = TypeDef::from(entity_def);
-        state.store.create_type(&type_def).await?;
-        if let TypeDef::Entity(def) = type_def {
-            created.entity_defs.push(def);
-        }
-    }
-
-    // Create classification types
-    for class_def in req.classification_defs {
-        let type_def = TypeDef::from(class_def);
-        state.store.create_type(&type_def).await?;
-        if let TypeDef::Classification(def) = type_def {
-            created.classification_defs.push(def);
-        }
-    }
-
-    // Create struct types
-    for struct_def in req.struct_defs {
-        let type_def = TypeDef::from(struct_def);
-        state.store.create_type(&type_def).await?;
-        if let TypeDef::Struct(def) = type_def {
-            created.struct_defs.push(def);
-        }
-    }
-
-    // Create enum types
-    for enum_def in req.enum_defs {
-        let type_def = TypeDef::from(enum_def);
-        state.store.create_type(&type_def).await?;
-        if let TypeDef::Enum(def) = type_def {
-            created.enum_defs.push(def);
-        }
-    }
-
-    // Create relationship types
-    for rel_def in req.relationship_defs {
-        let type_def = TypeDef::from(rel_def);
-        state.store.create_type(&type_def).await?;
-        if let TypeDef::Relationship(def) = type_def {
-            created.relationship_defs.push(def);
+    for type_def in all_types {
+        match type_def {
+            TypeDef::Entity(def) => created.entity_defs.push(def),
+            TypeDef::Classification(def) => created.classification_defs.push(def),
+            TypeDef::Struct(def) => created.struct_defs.push(def),
+            TypeDef::Enum(def) => created.enum_defs.push(def),
+            TypeDef::Relationship(def) => created.relationship_defs.push(def),
+            TypeDef::BusinessMetadata(def) => created.business_metadata_defs.push(def),
         }
     }
 
@@ -141,50 +122,31 @@ pub async fn update_types(
     State(state): State<MetavisorAppState>,
     Json(req): Json<TypesDef>,
 ) -> Result<Json<TypesDef>> {
+    // Collect all type definitions for atomic batch update
+    let all_types: Vec<TypeDef> = req
+        .entity_defs
+        .into_iter()
+        .map(TypeDef::from)
+        .chain(req.classification_defs.into_iter().map(TypeDef::from))
+        .chain(req.struct_defs.into_iter().map(TypeDef::from))
+        .chain(req.enum_defs.into_iter().map(TypeDef::from))
+        .chain(req.relationship_defs.into_iter().map(TypeDef::from))
+        .chain(req.business_metadata_defs.into_iter().map(TypeDef::from))
+        .collect();
+
+    // Update all types atomically
+    state.store.batch_update_types(&all_types).await?;
+
+    // Build response
     let mut updated = TypesDef::new();
-
-    // Update entity types
-    for entity_def in req.entity_defs {
-        let type_def = TypeDef::from(entity_def);
-        state.store.update_type(&type_def).await?;
-        if let TypeDef::Entity(def) = type_def {
-            updated.entity_defs.push(def);
-        }
-    }
-
-    // Update classification types
-    for class_def in req.classification_defs {
-        let type_def = TypeDef::from(class_def);
-        state.store.update_type(&type_def).await?;
-        if let TypeDef::Classification(def) = type_def {
-            updated.classification_defs.push(def);
-        }
-    }
-
-    // Update struct types
-    for struct_def in req.struct_defs {
-        let type_def = TypeDef::from(struct_def);
-        state.store.update_type(&type_def).await?;
-        if let TypeDef::Struct(def) = type_def {
-            updated.struct_defs.push(def);
-        }
-    }
-
-    // Update enum types
-    for enum_def in req.enum_defs {
-        let type_def = TypeDef::from(enum_def);
-        state.store.update_type(&type_def).await?;
-        if let TypeDef::Enum(def) = type_def {
-            updated.enum_defs.push(def);
-        }
-    }
-
-    // Update relationship types
-    for rel_def in req.relationship_defs {
-        let type_def = TypeDef::from(rel_def);
-        state.store.update_type(&type_def).await?;
-        if let TypeDef::Relationship(def) = type_def {
-            updated.relationship_defs.push(def);
+    for type_def in all_types {
+        match type_def {
+            TypeDef::Entity(def) => updated.entity_defs.push(def),
+            TypeDef::Classification(def) => updated.classification_defs.push(def),
+            TypeDef::Struct(def) => updated.struct_defs.push(def),
+            TypeDef::Enum(def) => updated.enum_defs.push(def),
+            TypeDef::Relationship(def) => updated.relationship_defs.push(def),
+            TypeDef::BusinessMetadata(def) => updated.business_metadata_defs.push(def),
         }
     }
 

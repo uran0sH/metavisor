@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use metavisor_core::{type_key, CoreError, Result, TypeCategory, TypeDef, TypeStore};
 
-use crate::kv::KvStore;
+use crate::kv::{KvStore, WriteOp};
 
 /// KvTypeStore - TypeStore implementation using surrealkv
 pub struct KvTypeStore {
@@ -154,6 +154,68 @@ impl TypeStore for KvTypeStore {
         names.dedup();
         Ok(names)
     }
+
+    async fn batch_create_types(&self, type_defs: &[TypeDef]) -> Result<()> {
+        // Phase 1: Validate all types don't already exist
+        for type_def in type_defs {
+            let key = type_key(type_def.name());
+            if self
+                .kv
+                .exists(&key)
+                .await
+                .map_err(|e| CoreError::Storage(e.to_string()))?
+            {
+                return Err(CoreError::TypeAlreadyExists(type_def.name().to_string()));
+            }
+        }
+
+        // Phase 2: Build batch operations and write atomically
+        let mut ops = Vec::with_capacity(type_defs.len());
+        for type_def in type_defs {
+            let key = type_key(type_def.name());
+            let value = serde_json::to_vec(type_def)
+                .map_err(|e| CoreError::Storage(e.to_string()))?;
+            ops.push(WriteOp::Set { key, value });
+        }
+
+        self.kv
+            .batch_write(ops)
+            .await
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn batch_update_types(&self, type_defs: &[TypeDef]) -> Result<()> {
+        // Phase 1: Validate all types exist
+        for type_def in type_defs {
+            let key = type_key(type_def.name());
+            if !self
+                .kv
+                .exists(&key)
+                .await
+                .map_err(|e| CoreError::Storage(e.to_string()))?
+            {
+                return Err(CoreError::TypeNotFound(type_def.name().to_string()));
+            }
+        }
+
+        // Phase 2: Build batch operations and write atomically
+        let mut ops = Vec::with_capacity(type_defs.len());
+        for type_def in type_defs {
+            let key = type_key(type_def.name());
+            let value = serde_json::to_vec(type_def)
+                .map_err(|e| CoreError::Storage(e.to_string()))?;
+            ops.push(WriteOp::Set { key, value });
+        }
+
+        self.kv
+            .batch_write(ops)
+            .await
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -251,5 +313,98 @@ mod tests {
         let result = store.get_type("NonExistent").await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), CoreError::TypeNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_batch_create_types_success() {
+        let store = create_test_store().await;
+
+        let type_defs: Vec<TypeDef> = vec![
+            "Alpha", "Beta", "Gamma",
+        ]
+        .into_iter()
+        .map(|name| TypeDef::from(EntityDef::new(name).attribute(AttributeDef::new("id", "string"))))
+        .collect();
+
+        store.batch_create_types(&type_defs).await.unwrap();
+
+        // All three should exist
+        assert!(store.type_exists("Alpha").await.unwrap());
+        assert!(store.type_exists("Beta").await.unwrap());
+        assert!(store.type_exists("Gamma").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_batch_create_types_partial_failure_rollback() {
+        let store = create_test_store().await;
+
+        // Pre-create one type
+        let existing = TypeDef::from(EntityDef::new("Existing").attribute(AttributeDef::new("id", "string")));
+        store.create_type(&existing).await.unwrap();
+
+        // Try to batch create including the existing one
+        let type_defs: Vec<TypeDef> = vec![
+            "New1", "Existing", "New2",
+        ]
+        .into_iter()
+        .map(|name| TypeDef::from(EntityDef::new(name).attribute(AttributeDef::new("id", "string"))))
+        .collect();
+
+        let result = store.batch_create_types(&type_defs).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), CoreError::TypeAlreadyExists(_)));
+
+        // New1 and New2 should NOT exist — batch was atomic
+        assert!(!store.type_exists("New1").await.unwrap());
+        assert!(!store.type_exists("New2").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_batch_update_types_success() {
+        let store = create_test_store().await;
+
+        // Create two types
+        let type_defs: Vec<TypeDef> = vec![
+            TypeDef::from(EntityDef::new("A").attribute(AttributeDef::new("id", "string"))),
+            TypeDef::from(EntityDef::new("B").attribute(AttributeDef::new("id", "string"))),
+        ];
+        store.batch_create_types(&type_defs).await.unwrap();
+
+        // Update both
+        let updated_defs: Vec<TypeDef> = vec![
+            TypeDef::from(EntityDef::new("A").description("updated A").attribute(AttributeDef::new("id", "string"))),
+            TypeDef::from(EntityDef::new("B").description("updated B").attribute(AttributeDef::new("id", "string"))),
+        ];
+        store.batch_update_types(&updated_defs).await.unwrap();
+
+        let a = store.get_type("A").await.unwrap();
+        assert_eq!(a.name(), "A");
+    }
+
+    #[tokio::test]
+    async fn test_batch_update_types_missing_rollback() {
+        let store = create_test_store().await;
+
+        // Create only one type
+        let existing = TypeDef::from(EntityDef::new("Exists").attribute(AttributeDef::new("id", "string")));
+        store.create_type(&existing).await.unwrap();
+
+        // Try to update both an existing and non-existing type
+        let update_defs: Vec<TypeDef> = vec![
+            TypeDef::from(EntityDef::new("Exists").description("v2").attribute(AttributeDef::new("id", "string"))),
+            TypeDef::from(EntityDef::new("Ghost").description("v2").attribute(AttributeDef::new("id", "string"))),
+        ];
+
+        let result = store.batch_update_types(&update_defs).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), CoreError::TypeNotFound(_)));
+
+        // "Exists" should NOT be updated — batch was atomic
+        let fetched = store.get_type("Exists").await.unwrap();
+        // The original has no description
+        match fetched {
+            TypeDef::Entity(def) => assert!(def.description.is_none() || def.description.as_deref() == Some("")),
+            _ => panic!("Expected Entity variant"),
+        }
     }
 }

@@ -393,6 +393,14 @@ impl MetavisorStore for DefaultMetavisorStore {
         self.type_store.list_types().await
     }
 
+    async fn batch_create_types(&self, type_defs: &[TypeDef]) -> Result<()> {
+        self.type_store.batch_create_types(type_defs).await
+    }
+
+    async fn batch_update_types(&self, type_defs: &[TypeDef]) -> Result<()> {
+        self.type_store.batch_update_types(type_defs).await
+    }
+
     async fn create_entity(&self, entity: &Entity) -> Result<String> {
         let _write_guard = self.write_barrier.read().await;
         let guid = self.entity_store.create_entity(entity).await?;

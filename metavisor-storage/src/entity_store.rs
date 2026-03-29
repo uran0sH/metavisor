@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::kv::KvStore;
+use crate::kv::{KvStore, WriteOp};
 
 /// KvEntityStore - EntityStore implementation using surrealkv
 pub struct KvEntityStore {
@@ -124,20 +124,30 @@ impl EntityStore for KvEntityStore {
             return Err(CoreError::EntityAlreadyExists(guid));
         }
 
-        // Store the entity with the GUID
+        // Prepare entity with GUID
         let mut entity_with_guid = entity.clone();
         entity_with_guid.guid = Some(guid.clone());
-
-        self.kv
-            .put(&key, &entity_with_guid)
-            .await
-            .map_err(|e| CoreError::Storage(e.to_string()))?;
-
-        // Create type index entry
-        let type_index_key = entity_type_index_key(&entity.type_name, &guid);
         let header = entity_with_guid.to_header();
+
+        // Build atomic batch: entity data + type index
+        let entity_bytes =
+            serde_json::to_vec(&entity_with_guid).map_err(|e| CoreError::Storage(e.to_string()))?;
+        let header_bytes =
+            serde_json::to_vec(&header).map_err(|e| CoreError::Storage(e.to_string()))?;
+
+        let ops = vec![
+            WriteOp::Set {
+                key,
+                value: entity_bytes,
+            },
+            WriteOp::Set {
+                key: entity_type_index_key(&entity.type_name, &guid),
+                value: header_bytes,
+            },
+        ];
+
         self.kv
-            .put(&type_index_key, &header)
+            .batch_write(ops)
             .await
             .map_err(|e| CoreError::Storage(e.to_string()))?;
 
@@ -198,27 +208,42 @@ impl EntityStore for KvEntityStore {
 
         let key = entity_key(guid);
 
-        // Check if entity exists
-        if !self
+        // Get the existing entity
+        let existing = self
             .kv
-            .exists(&key)
+            .get::<Entity>(&key)
             .await
             .map_err(|e| CoreError::Storage(e.to_string()))?
-        {
-            return Err(CoreError::EntityNotFound(guid.clone()));
+            .ok_or_else(|| CoreError::EntityNotFound(guid.clone()))?;
+
+        // typeName is immutable
+        if existing.type_name != entity.type_name {
+            return Err(CoreError::Validation(
+                "Cannot change entity typeName. Delete and recreate the entity instead."
+                    .to_string(),
+            ));
         }
 
-        // Update the entity
-        self.kv
-            .put(&key, entity)
-            .await
-            .map_err(|e| CoreError::Storage(e.to_string()))?;
-
-        // Update type index entry
-        let type_index_key = entity_type_index_key(&entity.type_name, guid);
+        // Build atomic batch: entity data + type index
+        let entity_bytes =
+            serde_json::to_vec(entity).map_err(|e| CoreError::Storage(e.to_string()))?;
         let header = entity.to_header();
+        let header_bytes =
+            serde_json::to_vec(&header).map_err(|e| CoreError::Storage(e.to_string()))?;
+
+        let ops = vec![
+            WriteOp::Set {
+                key,
+                value: entity_bytes,
+            },
+            WriteOp::Set {
+                key: entity_type_index_key(&entity.type_name, guid),
+                value: header_bytes,
+            },
+        ];
+
         self.kv
-            .put(&type_index_key, &header)
+            .batch_write(ops)
             .await
             .map_err(|e| CoreError::Storage(e.to_string()))?;
 
@@ -228,18 +253,19 @@ impl EntityStore for KvEntityStore {
     async fn delete_entity(&self, guid: &str) -> Result<()> {
         // First get the entity to find its type name
         let entity = self.get_entity(guid).await?;
-        let key = entity_key(guid);
 
-        // Delete the entity
-        self.kv
-            .delete(&key)
-            .await
-            .map_err(|e| CoreError::Storage(e.to_string()))?;
+        // Build atomic batch: delete entity data + type index
+        let ops = vec![
+            WriteOp::Delete {
+                key: entity_key(guid),
+            },
+            WriteOp::Delete {
+                key: entity_type_index_key(&entity.type_name, guid),
+            },
+        ];
 
-        // Delete type index entry
-        let type_index_key = entity_type_index_key(&entity.type_name, guid);
         self.kv
-            .delete(&type_index_key)
+            .batch_write(ops)
             .await
             .map_err(|e| CoreError::Storage(e.to_string()))?;
 

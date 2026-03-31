@@ -173,8 +173,8 @@ impl TypeStore for KvTypeStore {
         let mut ops = Vec::with_capacity(type_defs.len());
         for type_def in type_defs {
             let key = type_key(type_def.name());
-            let value = serde_json::to_vec(type_def)
-                .map_err(|e| CoreError::Storage(e.to_string()))?;
+            let value =
+                serde_json::to_vec(type_def).map_err(|e| CoreError::Storage(e.to_string()))?;
             ops.push(WriteOp::Set { key, value });
         }
 
@@ -204,8 +204,8 @@ impl TypeStore for KvTypeStore {
         let mut ops = Vec::with_capacity(type_defs.len());
         for type_def in type_defs {
             let key = type_key(type_def.name());
-            let value = serde_json::to_vec(type_def)
-                .map_err(|e| CoreError::Storage(e.to_string()))?;
+            let value =
+                serde_json::to_vec(type_def).map_err(|e| CoreError::Storage(e.to_string()))?;
             ops.push(WriteOp::Set { key, value });
         }
 
@@ -319,12 +319,12 @@ mod tests {
     async fn test_batch_create_types_success() {
         let store = create_test_store().await;
 
-        let type_defs: Vec<TypeDef> = vec![
-            "Alpha", "Beta", "Gamma",
-        ]
-        .into_iter()
-        .map(|name| TypeDef::from(EntityDef::new(name).attribute(AttributeDef::new("id", "string"))))
-        .collect();
+        let type_defs: Vec<TypeDef> = vec!["Alpha", "Beta", "Gamma"]
+            .into_iter()
+            .map(|name| {
+                TypeDef::from(EntityDef::new(name).attribute(AttributeDef::new("id", "string")))
+            })
+            .collect();
 
         store.batch_create_types(&type_defs).await.unwrap();
 
@@ -339,20 +339,24 @@ mod tests {
         let store = create_test_store().await;
 
         // Pre-create one type
-        let existing = TypeDef::from(EntityDef::new("Existing").attribute(AttributeDef::new("id", "string")));
+        let existing =
+            TypeDef::from(EntityDef::new("Existing").attribute(AttributeDef::new("id", "string")));
         store.create_type(&existing).await.unwrap();
 
         // Try to batch create including the existing one
-        let type_defs: Vec<TypeDef> = vec![
-            "New1", "Existing", "New2",
-        ]
-        .into_iter()
-        .map(|name| TypeDef::from(EntityDef::new(name).attribute(AttributeDef::new("id", "string"))))
-        .collect();
+        let type_defs: Vec<TypeDef> = vec!["New1", "Existing", "New2"]
+            .into_iter()
+            .map(|name| {
+                TypeDef::from(EntityDef::new(name).attribute(AttributeDef::new("id", "string")))
+            })
+            .collect();
 
         let result = store.batch_create_types(&type_defs).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), CoreError::TypeAlreadyExists(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            CoreError::TypeAlreadyExists(_)
+        ));
 
         // New1 and New2 should NOT exist — batch was atomic
         assert!(!store.type_exists("New1").await.unwrap());
@@ -372,8 +376,16 @@ mod tests {
 
         // Update both
         let updated_defs: Vec<TypeDef> = vec![
-            TypeDef::from(EntityDef::new("A").description("updated A").attribute(AttributeDef::new("id", "string"))),
-            TypeDef::from(EntityDef::new("B").description("updated B").attribute(AttributeDef::new("id", "string"))),
+            TypeDef::from(
+                EntityDef::new("A")
+                    .description("updated A")
+                    .attribute(AttributeDef::new("id", "string")),
+            ),
+            TypeDef::from(
+                EntityDef::new("B")
+                    .description("updated B")
+                    .attribute(AttributeDef::new("id", "string")),
+            ),
         ];
         store.batch_update_types(&updated_defs).await.unwrap();
 
@@ -386,13 +398,22 @@ mod tests {
         let store = create_test_store().await;
 
         // Create only one type
-        let existing = TypeDef::from(EntityDef::new("Exists").attribute(AttributeDef::new("id", "string")));
+        let existing =
+            TypeDef::from(EntityDef::new("Exists").attribute(AttributeDef::new("id", "string")));
         store.create_type(&existing).await.unwrap();
 
         // Try to update both an existing and non-existing type
         let update_defs: Vec<TypeDef> = vec![
-            TypeDef::from(EntityDef::new("Exists").description("v2").attribute(AttributeDef::new("id", "string"))),
-            TypeDef::from(EntityDef::new("Ghost").description("v2").attribute(AttributeDef::new("id", "string"))),
+            TypeDef::from(
+                EntityDef::new("Exists")
+                    .description("v2")
+                    .attribute(AttributeDef::new("id", "string")),
+            ),
+            TypeDef::from(
+                EntityDef::new("Ghost")
+                    .description("v2")
+                    .attribute(AttributeDef::new("id", "string")),
+            ),
         ];
 
         let result = store.batch_update_types(&update_defs).await;
@@ -403,7 +424,9 @@ mod tests {
         let fetched = store.get_type("Exists").await.unwrap();
         // The original has no description
         match fetched {
-            TypeDef::Entity(def) => assert!(def.description.is_none() || def.description.as_deref() == Some("")),
+            TypeDef::Entity(def) => {
+                assert!(def.description.is_none() || def.description.as_deref() == Some(""))
+            }
             _ => panic!("Expected Entity variant"),
         }
     }

@@ -14,6 +14,9 @@ pub enum StorageError {
     #[error("Key already exists: {0}")]
     AlreadyExists(String),
 
+    #[error("Conflict: value changed for key: {0}")]
+    Conflict(String),
+
     #[error("KV store error: {0}")]
     Kv(String),
 

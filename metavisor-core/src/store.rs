@@ -146,23 +146,33 @@ const RELATIONSHIP_ENDPOINT_INDEX_PREFIX: &[u8] = b"rel_endpoint:";
 /// Relationship type index prefix
 const RELATIONSHIP_TYPE_INDEX_PREFIX: &[u8] = b"rel_type:";
 
+/// Entity unique attribute index prefix
+/// Format: entity_unique:{type_name}:{attr_name}:{attr_value} -> entity_guid
+const ENTITY_UNIQUE_INDEX_PREFIX: &[u8] = b"entity_unique:";
+
 /// Build the key for storing a type definition
 pub fn type_key(name: &str) -> Vec<u8> {
-    let mut key = TYPE_PREFIX.to_vec();
+    let cap = TYPE_PREFIX.len() + name.len();
+    let mut key = Vec::with_capacity(cap);
+    key.extend_from_slice(TYPE_PREFIX);
     key.extend_from_slice(name.as_bytes());
     key
 }
 
 /// Build the key for storing an entity by GUID
 pub fn entity_key(guid: &str) -> Vec<u8> {
-    let mut key = ENTITY_PREFIX.to_vec();
+    let cap = ENTITY_PREFIX.len() + guid.len();
+    let mut key = Vec::with_capacity(cap);
+    key.extend_from_slice(ENTITY_PREFIX);
     key.extend_from_slice(guid.as_bytes());
     key
 }
 
 /// Build the key for entity type index
 pub fn entity_type_index_key(type_name: &str, guid: &str) -> Vec<u8> {
-    let mut key = ENTITY_TYPE_INDEX_PREFIX.to_vec();
+    let cap = ENTITY_TYPE_INDEX_PREFIX.len() + type_name.len() + 1 + guid.len();
+    let mut key = Vec::with_capacity(cap);
+    key.extend_from_slice(ENTITY_TYPE_INDEX_PREFIX);
     key.extend_from_slice(type_name.as_bytes());
     key.push(b':');
     key.extend_from_slice(guid.as_bytes());
@@ -171,7 +181,9 @@ pub fn entity_type_index_key(type_name: &str, guid: &str) -> Vec<u8> {
 
 /// Build the key for storing a relationship by GUID
 pub fn relationship_key(guid: &str) -> Vec<u8> {
-    let mut key = RELATIONSHIP_PREFIX.to_vec();
+    let cap = RELATIONSHIP_PREFIX.len() + guid.len();
+    let mut key = Vec::with_capacity(cap);
+    key.extend_from_slice(RELATIONSHIP_PREFIX);
     key.extend_from_slice(guid.as_bytes());
     key
 }
@@ -179,7 +191,10 @@ pub fn relationship_key(guid: &str) -> Vec<u8> {
 /// Build the key for relationship endpoint index
 /// Format: rel_endpoint:{entity_guid}:{relationship_guid}
 pub fn relationship_endpoint_index_key(entity_guid: &str, relationship_guid: &str) -> Vec<u8> {
-    let mut key = RELATIONSHIP_ENDPOINT_INDEX_PREFIX.to_vec();
+    let cap =
+        RELATIONSHIP_ENDPOINT_INDEX_PREFIX.len() + entity_guid.len() + 1 + relationship_guid.len();
+    let mut key = Vec::with_capacity(cap);
+    key.extend_from_slice(RELATIONSHIP_ENDPOINT_INDEX_PREFIX);
     key.extend_from_slice(entity_guid.as_bytes());
     key.push(b':');
     key.extend_from_slice(relationship_guid.as_bytes());
@@ -189,10 +204,31 @@ pub fn relationship_endpoint_index_key(entity_guid: &str, relationship_guid: &st
 /// Build the key for relationship type index
 /// Format: rel_type:{type_name}:{guid}
 pub fn relationship_type_index_key(type_name: &str, guid: &str) -> Vec<u8> {
-    let mut key = RELATIONSHIP_TYPE_INDEX_PREFIX.to_vec();
+    let cap = RELATIONSHIP_TYPE_INDEX_PREFIX.len() + type_name.len() + 1 + guid.len();
+    let mut key = Vec::with_capacity(cap);
+    key.extend_from_slice(RELATIONSHIP_TYPE_INDEX_PREFIX);
     key.extend_from_slice(type_name.as_bytes());
     key.push(b':');
     key.extend_from_slice(guid.as_bytes());
+    key
+}
+
+/// Build the key for entity unique attribute index
+/// Format: entity_unique:{type_name}:{attr_name}:{attr_value}
+pub fn entity_unique_index_key(type_name: &str, attr_name: &str, attr_value: &str) -> Vec<u8> {
+    let cap = ENTITY_UNIQUE_INDEX_PREFIX.len()
+        + type_name.len()
+        + 1
+        + attr_name.len()
+        + 1
+        + attr_value.len();
+    let mut key = Vec::with_capacity(cap);
+    key.extend_from_slice(ENTITY_UNIQUE_INDEX_PREFIX);
+    key.extend_from_slice(type_name.as_bytes());
+    key.push(b':');
+    key.extend_from_slice(attr_name.as_bytes());
+    key.push(b':');
+    key.extend_from_slice(attr_value.as_bytes());
     key
 }
 

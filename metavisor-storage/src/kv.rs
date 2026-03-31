@@ -13,6 +13,14 @@ pub enum WriteOp {
     Delete { key: Vec<u8> },
 }
 
+/// A precondition check for conditional writes
+pub enum CheckOp {
+    /// Key must NOT exist (for uniqueness enforcement)
+    Absent { key: Vec<u8> },
+    /// Key must exist with exactly this value (for optimistic concurrency / stale-snapshot detection)
+    ValueEquals { key: Vec<u8>, expected: Vec<u8> },
+}
+
 /// KV Store wrapper
 #[derive(Clone)]
 pub struct KvStore {
@@ -51,6 +59,16 @@ impl KvStore {
             }
             None => Ok(None),
         }
+    }
+
+    /// Get raw bytes by key (no deserialization)
+    pub async fn get_raw(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        let txn = self
+            .inner
+            .begin()
+            .map_err(|e| StorageError::Kv(e.to_string()))?;
+        txn.get(key.to_vec())
+            .map_err(|e| StorageError::Kv(e.to_string()))
     }
 
     /// Put a key-value pair
@@ -105,6 +123,73 @@ impl KvStore {
             .begin()
             .map_err(|e| StorageError::Kv(e.to_string()))?;
 
+        for op in ops {
+            match op {
+                WriteOp::Set { key, value } => {
+                    txn.set(key, value)
+                        .map_err(|e| StorageError::Kv(e.to_string()))?;
+                }
+                WriteOp::Delete { key } => {
+                    txn.delete(key)
+                        .map_err(|e| StorageError::Kv(e.to_string()))?;
+                }
+            }
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| StorageError::Kv(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Execute precondition checks followed by write operations in a single transaction.
+    /// If any check fails, no writes are performed.
+    /// This eliminates TOCTOU races between read-checks and writes.
+    pub async fn conditional_batch_write(
+        &self,
+        checks: Vec<CheckOp>,
+        ops: Vec<WriteOp>,
+    ) -> Result<()> {
+        let mut txn = self
+            .inner
+            .begin()
+            .map_err(|e| StorageError::Kv(e.to_string()))?;
+
+        // Phase 1: verify preconditions
+        for check in &checks {
+            match check {
+                CheckOp::Absent { key } => {
+                    let existing = txn
+                        .get(key.to_vec())
+                        .map_err(|e| StorageError::Kv(e.to_string()))?;
+                    if existing.is_some() {
+                        return Err(StorageError::AlreadyExists(
+                            String::from_utf8_lossy(key).into(),
+                        ));
+                    }
+                }
+                CheckOp::ValueEquals { key, expected } => {
+                    let actual = txn
+                        .get(key.to_vec())
+                        .map_err(|e| StorageError::Kv(e.to_string()))?;
+                    match actual {
+                        None => {
+                            return Err(StorageError::Conflict(
+                                String::from_utf8_lossy(key).into(),
+                            ));
+                        }
+                        Some(bytes) if bytes != *expected => {
+                            return Err(StorageError::Conflict(
+                                String::from_utf8_lossy(key).into(),
+                            ));
+                        }
+                        _ => {} // matches
+                    }
+                }
+            }
+        }
+
+        // Phase 2: apply writes (only reached if all checks passed)
         for op in ops {
             match op {
                 WriteOp::Set { key, value } => {

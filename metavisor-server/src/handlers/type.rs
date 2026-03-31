@@ -183,6 +183,11 @@ pub async fn delete_types(
         state.store.delete_type(&rel_def.name).await?;
     }
 
+    // Delete business metadata types
+    for bm_def in &req.business_metadata_defs {
+        state.store.delete_type(&bm_def.name).await?;
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }
 

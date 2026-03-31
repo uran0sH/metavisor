@@ -1,7 +1,7 @@
 //! TypeStore implementation using KV store
 
 use async_trait::async_trait;
-use metavisor_core::{type_key, CoreError, Result, TypeCategory, TypeDef, TypeStore};
+use metavisor_core::{type_key, CoreError, Result, TypeCategory, TypeDef, TypeStore, TYPE_PREFIX};
 
 use crate::kv::{KvStore, WriteOp};
 
@@ -103,8 +103,6 @@ impl TypeStore for KvTypeStore {
     async fn list_types(&self) -> Result<Vec<String>> {
         // Scan the KV store for all keys under the type prefix.
         // Format: "type:{name}"
-        const TYPE_PREFIX: &[u8] = b"type:";
-
         let entries: Vec<(Vec<u8>, TypeDef)> = self
             .kv
             .scan_prefix(TYPE_PREFIX)
@@ -120,15 +118,12 @@ impl TypeStore for KvTypeStore {
             })
             .collect();
 
-        names.sort();
         names.dedup();
         Ok(names)
     }
 
-    async fn list_types_by_category(&self, _category: TypeCategory) -> Result<Vec<String>> {
+    async fn list_types_by_category(&self, category: TypeCategory) -> Result<Vec<String>> {
         // No secondary index yet; do a prefix scan and filter in memory.
-        const TYPE_PREFIX: &[u8] = b"type:";
-
         let entries: Vec<(Vec<u8>, TypeDef)> = self
             .kv
             .scan_prefix(TYPE_PREFIX)
@@ -137,10 +132,15 @@ impl TypeStore for KvTypeStore {
         let mut names: Vec<String> = entries
             .into_iter()
             .filter_map(|(key, def)| {
+                // Filter by category
                 if !matches!(
-                    (&def, _category),
+                    (&def, category),
                     (TypeDef::Entity(_), TypeCategory::Entity)
                         | (TypeDef::Relationship(_), TypeCategory::Relationship)
+                        | (TypeDef::Struct(_), TypeCategory::Struct)
+                        | (TypeDef::Enum(_), TypeCategory::Enum)
+                        | (TypeDef::Classification(_), TypeCategory::Classification)
+                        | (TypeDef::BusinessMetadata(_), TypeCategory::BusinessMetadata)
                 ) {
                     return None;
                 }
@@ -150,7 +150,6 @@ impl TypeStore for KvTypeStore {
             })
             .collect();
 
-        names.sort();
         names.dedup();
         Ok(names)
     }

@@ -129,7 +129,7 @@ pub trait RelationshipStore: Send + Sync {
 // ============================================================================
 
 /// Type prefix for KV storage
-const TYPE_PREFIX: &[u8] = b"type:";
+pub const TYPE_PREFIX: &[u8] = b"type:";
 
 /// Entity prefix for KV storage
 const ENTITY_PREFIX: &[u8] = b"entity:";

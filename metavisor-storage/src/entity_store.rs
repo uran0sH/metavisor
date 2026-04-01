@@ -41,13 +41,16 @@ impl KvEntityStore {
     }
 
     /// Parse a unique index key to extract attribute details for error messages.
-    /// Key format: `entity_unique:{type_name}:{attr_name}:{attr_value}`
+    /// Key format: `entity_unique\0{type_name}\0{attr_name}\0{attr_value}`
+    /// Uses null byte (\0) as separator to avoid ambiguity with values containing ':'
     fn parse_unique_violation(key_desc: &str) -> String {
-        let parts: Vec<&str> = key_desc.splitn(4, ':').collect();
-        if parts.len() == 4 {
+        // Split by null byte (\0)
+        let parts: Vec<&str> = key_desc.split('\0').collect();
+        if parts.len() >= 4 {
             format!(
                 "attribute '{}' with value '{}' already exists",
-                parts[2], parts[3]
+                parts[2],              // attr_name
+                parts[3..].join("\0")  // attr_value (may contain \0 if original value had it)
             )
         } else {
             key_desc.to_string()
@@ -63,14 +66,23 @@ impl KvEntityStore {
             .await
             .map_err(|_| CoreError::TypeNotFound(entity.type_name.clone()))?;
 
-        // 2. Get attribute definitions (only for Entity types)
-        let attr_defs = match type_def {
-            TypeDef::Entity(ref def) => &def.attribute_defs,
-            _ => return Ok(()), // Skip validation for non-entity types
+        // 2. Validate it's an Entity type (not Classification, Relationship, etc.)
+        let entity_def = match type_def {
+            TypeDef::Entity(ref def) => def,
+            other => {
+                return Err(CoreError::Validation(format!(
+                    "Type '{}' is a {:?}, not an Entity type. Entities can only be created for Entity types.",
+                    entity.type_name,
+                    other.category()
+                )));
+            }
         };
 
+        // 3. Collect all attribute definitions including inherited ones
+        let attr_defs = self.collect_all_attributes(entity_def).await?;
+
         // 3. Validate required attributes
-        for attr_def in attr_defs {
+        for attr_def in &attr_defs {
             if !attr_def.is_optional && !entity.attributes.contains_key(&attr_def.name) {
                 return Err(CoreError::Validation(format!(
                     "Required attribute '{}' is missing for type '{}'",
@@ -79,7 +91,17 @@ impl KvEntityStore {
             }
         }
 
-        // 4. Validate attribute types
+        // 4. Validate all entity attributes are defined in type (including inherited)
+        for name in entity.attributes.keys() {
+            if !attr_defs.iter().any(|a| &a.name == name) {
+                return Err(CoreError::Validation(format!(
+                    "Attribute '{}' is not defined for type '{}'",
+                    name, entity.type_name
+                )));
+            }
+        }
+
+        // 5. Validate attribute types
         for (name, value) in &entity.attributes {
             if let Some(attr_def) = attr_defs.iter().find(|a| &a.name == name) {
                 self.validate_attribute_type(&attr_def.type_name, value, name)?;
@@ -89,7 +111,47 @@ impl KvEntityStore {
         Ok(())
     }
 
-    /// Get unique attribute names for an entity type
+    /// Collect all attribute definitions including inherited ones from super types
+    /// Uses iterative approach to avoid recursion in async fn
+    async fn collect_all_attributes(
+        &self,
+        entity_def: &metavisor_core::EntityDef,
+    ) -> Result<Vec<metavisor_core::AttributeDef>> {
+        let mut all_attrs = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
+        let mut seen_types = std::collections::HashSet::new();
+        let mut types_to_process: Vec<metavisor_core::EntityDef> = vec![entity_def.clone()];
+
+        // Track the current type to detect circular inheritance
+        seen_types.insert(entity_def.name.clone());
+
+        while let Some(current_def) = types_to_process.pop() {
+            // Add current type's attributes
+            for attr in &current_def.attribute_defs {
+                if seen_names.insert(attr.name.clone()) {
+                    all_attrs.push(attr.clone());
+                }
+            }
+
+            // Queue super types for processing (with cycle detection)
+            for super_type_name in &current_def.super_types {
+                // Skip if we've already processed this type (circular inheritance)
+                if !seen_types.insert(super_type_name.clone()) {
+                    continue;
+                }
+
+                if let Ok(TypeDef::Entity(super_def)) =
+                    self.type_store.get_type(super_type_name).await
+                {
+                    types_to_process.push(super_def);
+                }
+            }
+        }
+
+        Ok(all_attrs)
+    }
+
+    /// Get unique attribute names for an entity type (including inherited from superTypes)
     /// Returns empty vec if type not found (for graceful handling)
     async fn get_unique_attributes(&self, type_name: &str) -> Result<Vec<String>> {
         let type_def = match self.type_store.get_type(type_name).await {
@@ -98,12 +160,15 @@ impl KvEntityStore {
             Err(e) => return Err(e),
         };
 
-        let attr_defs = match type_def {
-            TypeDef::Entity(def) => def.attribute_defs,
+        let entity_def = match type_def {
+            TypeDef::Entity(def) => def,
             _ => return Ok(Vec::new()),
         };
 
-        let unique_attrs: Vec<String> = attr_defs
+        // Collect all attributes including inherited from superTypes
+        let all_attrs = self.collect_all_attributes(&entity_def).await?;
+
+        let unique_attrs: Vec<String> = all_attrs
             .into_iter()
             .filter(|attr| attr.is_unique == Some(true))
             .map(|attr| attr.name)
@@ -205,11 +270,23 @@ impl KvEntityStore {
             "float" | "double" => value.is_number(),
             "boolean" => value.is_boolean(),
             "date" | "datetime" => value.is_string(), // String representation
-            "array<string>" => value.is_array(),
-            "array<int>" | "array<long>" => value.is_array(),
-            "map<string,string>" | "map<string,object>" => value.is_object(),
-            // For other types (references, custom types), skip validation
-            _ => true,
+            "array<string>" => self.validate_array_element_type(value, "string", attr_name)?,
+            "array<int>" | "array<long>" => {
+                self.validate_array_element_type(value, "int", attr_name)?
+            }
+            "map<string,string>" => {
+                self.validate_map_element_types(value, "string", "string", attr_name)?
+            }
+            "map<string,object>" => {
+                self.validate_map_element_types(value, "string", "object", attr_name)?
+            }
+            // For other types (references, custom types), reject unknown type names
+            _ => {
+                return Err(CoreError::Validation(format!(
+                    "Unknown attribute type '{}' for attribute '{}'",
+                    type_name, attr_name
+                )));
+            }
         };
 
         if !is_valid {
@@ -226,6 +303,82 @@ impl KvEntityStore {
         }
 
         Ok(())
+    }
+
+    /// Validate array elements match the expected element type
+    fn validate_array_element_type(
+        &self,
+        value: &serde_json::Value,
+        element_type: &str,
+        attr_name: &str,
+    ) -> Result<bool> {
+        if !value.is_array() {
+            return Ok(false);
+        }
+
+        let arr = value.as_array().unwrap();
+        for (i, elem) in arr.iter().enumerate() {
+            let elem_valid = match element_type {
+                "string" => elem.is_string(),
+                "int" | "long" => elem.is_i64() || elem.is_u64(),
+                _ => true, // Unknown element types pass through
+            };
+
+            if !elem_valid {
+                return Err(CoreError::Validation(format!(
+                    "Attribute '{}' array element at index {} has invalid type. Expected '{}', got: {}",
+                    attr_name,
+                    i,
+                    element_type,
+                    elem
+                )));
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Validate map key and value types
+    fn validate_map_element_types(
+        &self,
+        value: &serde_json::Value,
+        key_type: &str,
+        value_type: &str,
+        attr_name: &str,
+    ) -> Result<bool> {
+        if !value.is_object() {
+            return Ok(false);
+        }
+
+        let obj = value.as_object().unwrap();
+        for (k, v) in obj.iter() {
+            // Validate key type (only string keys are supported for JSON maps)
+            if key_type == "string" && k.is_empty() {
+                return Err(CoreError::Validation(format!(
+                    "Attribute '{}' map contains empty key",
+                    attr_name
+                )));
+            }
+
+            // Validate value type
+            let value_valid = match value_type {
+                "string" => v.is_string(),
+                "object" => v.is_object() || v.is_string(), // object can be stringified JSON
+                _ => true,
+            };
+
+            if !value_valid {
+                return Err(CoreError::Validation(format!(
+                    "Attribute '{}' map value for key '{}' has invalid type. Expected '{}', got: {}",
+                    attr_name,
+                    k,
+                    value_type,
+                    v
+                )));
+            }
+        }
+
+        Ok(true)
     }
 }
 
@@ -278,7 +431,7 @@ impl EntityStore for KvEntityStore {
             .await
             .map_err(|e| {
                 if let crate::error::StorageError::AlreadyExists(ref key_desc) = e {
-                    if key_desc.starts_with("entity_unique:") {
+                    if key_desc.starts_with("entity_unique:\0") {
                         let detail = Self::parse_unique_violation(key_desc);
                         CoreError::Validation(format!(
                             "Unique constraint violation on type '{}': {}",
@@ -317,12 +470,25 @@ impl EntityStore for KvEntityStore {
             )));
         }
 
-        // Try to find entity using unique attribute index
-        // Use the first unique attribute to look up in the index
+        // Get unique attribute names for this type (including inherited)
         let unique_attr_names = self.get_unique_attributes(type_name).await?;
 
+        // Validate that at least one provided attribute is unique
+        let has_unique_attr = unique_attrs
+            .keys()
+            .any(|attr_name| unique_attr_names.contains(attr_name));
+
+        if !has_unique_attr {
+            return Err(CoreError::Validation(format!(
+                "At least one unique attribute is required for lookup. \
+                 Unique attributes for type '{}': {:?}",
+                type_name, unique_attr_names
+            )));
+        }
+
+        // Try to find using unique attribute index
         for (attr_name, attr_value) in unique_attrs {
-            // Only use index if this attribute is marked as unique in the type definition
+            // Skip non-unique attributes
             if !unique_attr_names.contains(attr_name) {
                 continue;
             }
@@ -347,24 +513,6 @@ impl EntityStore for KvEntityStore {
             }
         }
 
-        // Fallback: if no unique index found or no indexed attributes provided, scan all entities
-        // This maintains backward compatibility for non-unique lookups
-        let entities = self.list_entities_by_type(type_name).await?;
-        for header in entities {
-            let Some(guid) = header.guid else {
-                continue;
-            };
-
-            let entity = self.get_entity(&guid).await?;
-            let matches = unique_attrs
-                .iter()
-                .all(|(key, expected)| entity.attributes.get(key) == Some(expected));
-
-            if matches {
-                return Ok(entity);
-            }
-        }
-
         Err(CoreError::EntityNotFound(format!(
             "{} with unique attributes {:?}",
             type_name, unique_attrs
@@ -381,13 +529,17 @@ impl EntityStore for KvEntityStore {
 
         let key = entity_key(guid);
 
-        // Get the existing entity
-        let existing = self
+        // Read raw bytes for optimistic concurrency check and deserialize for validation.
+        // Using raw bytes avoids serde round-trip mismatch (key order, float repr, etc.)
+        let existing_bytes = self
             .kv
-            .get::<Entity>(&key)
+            .get_raw(&key)
             .await
             .map_err(|e| CoreError::Storage(e.to_string()))?
             .ok_or_else(|| CoreError::EntityNotFound(guid.clone()))?;
+
+        let existing: Entity = serde_json::from_slice(&existing_bytes)
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
 
         // typeName is immutable
         if existing.type_name != entity.type_name {
@@ -415,7 +567,14 @@ impl EntityStore for KvEntityStore {
         // Build precondition checks + index ops for unique constraints (atomic with writes)
         let (unique_checks, unique_ops) =
             Self::build_unique_ops(entity, false, &unique_attrs, true, &existing_index_keys);
-        let checks = unique_checks;
+
+        // Build checks: entity key must equal existing (optimistic locking) + unique constraints
+        let mut checks = Vec::with_capacity(1 + unique_checks.len());
+        checks.push(crate::kv::CheckOp::ValueEquals {
+            key: key.clone(),
+            expected: existing_bytes,
+        });
+        checks.extend(unique_checks);
 
         // Build atomic batch: entity data + type index + unique indices update
         let entity_bytes =
@@ -496,7 +655,10 @@ impl EntityStore for KvEntityStore {
             .await
             .map_err(|e| {
                 if matches!(e, crate::error::StorageError::Conflict(_)) {
-                    CoreError::EntityNotFound(guid.to_string())
+                    CoreError::Conflict(format!(
+                        "Entity '{}' was modified by another request",
+                        guid
+                    ))
                 } else {
                     CoreError::Storage(e.to_string())
                 }
@@ -526,19 +688,126 @@ impl EntityStore for KvEntityStore {
     }
 
     async fn list_entities(&self) -> Result<Vec<EntityHeader>> {
-        const ENTITY_PREFIX: &[u8] = b"entity:";
+        // Scan entity_type index (stores EntityHeader directly) for better performance
+        // This avoids deserializing full Entity objects just to extract headers
+        const TYPE_PREFIX: &[u8] = b"entity_type:";
 
-        let mut entries: Vec<(Vec<u8>, Entity)> = self
+        let mut entries: Vec<(Vec<u8>, EntityHeader)> = self
             .kv
-            .scan_prefix(ENTITY_PREFIX)
+            .scan_prefix(TYPE_PREFIX)
             .map_err(|e| CoreError::Storage(e.to_string()))?;
 
-        let mut headers: Vec<EntityHeader> = entries
-            .drain(..)
-            .map(|(_, entity)| entity.to_header())
-            .collect();
+        let mut headers: Vec<EntityHeader> = entries.drain(..).map(|(_, header)| header).collect();
         headers.sort_by(|a, b| a.guid.cmp(&b.guid));
         Ok(headers)
+    }
+
+    /// Create multiple entities atomically.
+    /// Either all entities are created successfully, or none are (all-or-nothing).
+    async fn batch_create_entities(&self, entities: &[Entity]) -> Result<Vec<String>> {
+        // Phase 1: Validate all entities and prepare data
+        let mut entities_with_guid: Vec<(Entity, String)> = Vec::with_capacity(entities.len());
+        let mut all_checks: Vec<crate::kv::CheckOp> = Vec::new();
+        let mut all_ops: Vec<WriteOp> = Vec::new();
+
+        // Track unique constraint violations within the batch
+        let mut seen_unique_keys: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        for entity in entities {
+            // Validate entity against type definition
+            self.validate_entity(entity).await?;
+
+            // Generate GUID if not provided
+            let guid = entity.guid.clone().unwrap_or_else(Self::generate_guid);
+
+            // Check for duplicate GUIDs within the batch
+            if entities_with_guid.iter().any(|(_, g)| g == &guid) {
+                return Err(CoreError::Validation(format!(
+                    "Duplicate GUID '{}' within batch",
+                    guid
+                )));
+            }
+
+            // Prepare entity with GUID
+            let mut entity_with_guid = entity.clone();
+            entity_with_guid.guid = Some(guid.clone());
+
+            // Get unique attributes for this entity type
+            let unique_attrs = self.get_unique_attributes(&entity.type_name).await?;
+
+            // Check for duplicate unique constraints within the batch
+            for attr_name in &unique_attrs {
+                if let Some(value) = entity.attributes.get(attr_name) {
+                    if let Some(attr_value) = Self::attr_to_index_value(value) {
+                        if !attr_value.is_empty() {
+                            let unique_key = format!(
+                                "{}:{}:{}:{}",
+                                entity.type_name, attr_name, attr_value, guid
+                            );
+                            if !seen_unique_keys.insert(unique_key.clone()) {
+                                return Err(CoreError::Validation(format!(
+                                    "Duplicate unique attribute '{}' with value '{}' for type '{}' within batch",
+                                    attr_name, attr_value, entity.type_name
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Build checks and ops for this entity
+            let key = entity_key(&guid);
+            let (unique_checks, unique_ops) =
+                Self::build_unique_ops(&entity_with_guid, false, &unique_attrs, false, &[]);
+
+            // Entity key must not exist
+            all_checks.push(crate::kv::CheckOp::Absent { key: key.clone() });
+            all_checks.extend(unique_checks);
+
+            // Build entity data
+            let entity_bytes = serde_json::to_vec(&entity_with_guid)
+                .map_err(|e| CoreError::Storage(e.to_string()))?;
+            let header = entity_with_guid.to_header();
+            let header_bytes =
+                serde_json::to_vec(&header).map_err(|e| CoreError::Storage(e.to_string()))?;
+
+            all_ops.push(WriteOp::Set {
+                key,
+                value: entity_bytes,
+            });
+            all_ops.push(WriteOp::Set {
+                key: entity_type_index_key(&entity.type_name, &guid),
+                value: header_bytes,
+            });
+            all_ops.extend(unique_ops);
+
+            entities_with_guid.push((entity_with_guid, guid));
+        }
+
+        // Phase 2: Atomic write
+        self.kv
+            .conditional_batch_write(all_checks, all_ops)
+            .await
+            .map_err(|e| {
+                if let crate::error::StorageError::AlreadyExists(ref key_desc) = e {
+                    if key_desc.starts_with("entity_unique:\0") {
+                        let detail = Self::parse_unique_violation(key_desc);
+                        CoreError::Validation(format!("Unique constraint violation: {}", detail))
+                    } else {
+                        CoreError::EntityAlreadyExists(key_desc.clone())
+                    }
+                } else {
+                    CoreError::Storage(e.to_string())
+                }
+            })?;
+
+        // Extract and return GUIDs in order
+        let guids: Vec<String> = entities_with_guid
+            .into_iter()
+            .map(|(_, guid)| guid)
+            .collect();
+        Ok(guids)
     }
 }
 

@@ -1537,6 +1537,7 @@ dependencies = [
  "metavisor-core",
  "serde",
  "serde_json",
+ "sha2",
  "surrealkv",
  "tantivy",
  "tempfile",

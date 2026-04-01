@@ -296,35 +296,6 @@ impl DefaultMetavisorStore {
         );
     }
 
-    pub async fn bulk_create_entities(&self, entities: &[Entity]) -> Result<Vec<String>> {
-        let _write_guard = self.write_barrier.read().await;
-        let mut guids = Vec::with_capacity(entities.len());
-
-        for entity in entities {
-            let guid = self.entity_store.create_entity(entity).await?;
-            guids.push(guid);
-        }
-
-        for (entity, guid) in entities.iter().zip(&guids) {
-            let display_name = entity.attributes.get("name").and_then(|v| v.as_str());
-            let classifications: Vec<String> = entity
-                .classifications
-                .iter()
-                .map(|c| c.type_name.clone())
-                .collect();
-
-            if let Err(err) = self
-                .graph_store
-                .add_entity_node(guid, &entity.type_name, display_name, classifications)
-                .await
-            {
-                self.record_projection_failure("bulk_create", "entity", guid, &err);
-            }
-        }
-
-        Ok(guids)
-    }
-
     async fn update_entity_classifications(&self, entity: &Entity) -> Result<()> {
         self.entity_store.update_entity(entity).await?;
 
@@ -377,6 +348,10 @@ impl MetavisorStore for DefaultMetavisorStore {
         self.type_store.get_type(name).await
     }
 
+    async fn get_type_by_guid(&self, guid: &str) -> Result<TypeDef> {
+        self.type_store.get_type_by_guid(guid).await
+    }
+
     async fn update_type(&self, type_def: &TypeDef) -> Result<()> {
         self.type_store.update_type(type_def).await
     }
@@ -393,12 +368,20 @@ impl MetavisorStore for DefaultMetavisorStore {
         self.type_store.list_types().await
     }
 
+    async fn list_type_defs(&self) -> Result<Vec<TypeDef>> {
+        self.type_store.list_type_defs().await
+    }
+
     async fn batch_create_types(&self, type_defs: &[TypeDef]) -> Result<()> {
         self.type_store.batch_create_types(type_defs).await
     }
 
     async fn batch_update_types(&self, type_defs: &[TypeDef]) -> Result<()> {
         self.type_store.batch_update_types(type_defs).await
+    }
+
+    async fn batch_delete_types(&self, names: &[String]) -> Result<()> {
+        self.type_store.batch_delete_types(names).await
     }
 
     async fn create_entity(&self, entity: &Entity) -> Result<String> {
@@ -418,9 +401,48 @@ impl MetavisorStore for DefaultMetavisorStore {
             .await
         {
             self.record_projection_failure("create", "entity", &guid, &err);
+            tracing::error!(
+                entity_guid = %guid,
+                entity_type = %entity.type_name,
+                error = %err,
+                "Graph projection failed for created entity; lineage queries may be inconsistent"
+            );
         }
 
         Ok(guid)
+    }
+
+    async fn batch_create_entities(&self, entities: &[Entity]) -> Result<Vec<String>> {
+        let _write_guard = self.write_barrier.read().await;
+
+        // Phase 1: Atomically create all entities in KV store
+        let guids = self.entity_store.batch_create_entities(entities).await?;
+
+        // Phase 2: Sync to graph (best-effort, failures are logged but not rolled back)
+        for (entity, guid) in entities.iter().zip(&guids) {
+            let display_name = entity.attributes.get("name").and_then(|v| v.as_str());
+            let classifications: Vec<String> = entity
+                .classifications
+                .iter()
+                .map(|c| c.type_name.clone())
+                .collect();
+
+            if let Err(err) = self
+                .graph_store
+                .add_entity_node(guid, &entity.type_name, display_name, classifications)
+                .await
+            {
+                self.record_projection_failure("batch_create", "entity", guid, &err);
+                tracing::error!(
+                    entity_guid = %guid,
+                    entity_type = %entity.type_name,
+                    error = %err,
+                    "Graph projection failed for batch created entity; lineage queries may be inconsistent"
+                );
+            }
+        }
+
+        Ok(guids)
     }
 
     async fn get_entity(&self, guid: &str) -> Result<Entity> {
@@ -457,6 +479,11 @@ impl MetavisorStore for DefaultMetavisorStore {
             Ok(updated) => updated,
             Err(err) => {
                 self.record_projection_failure("update", "entity", guid, &err);
+                tracing::error!(
+                    entity_guid = %guid,
+                    error = %err,
+                    "Graph projection failed for updated entity; lineage queries may be inconsistent"
+                );
                 return Ok(());
             }
         };
@@ -478,6 +505,11 @@ impl MetavisorStore for DefaultMetavisorStore {
                     .await
                 {
                     self.record_projection_failure("update", "entity", entity_guid, &err);
+                    tracing::error!(
+                        entity_guid = %entity_guid,
+                        error = %err,
+                        "Graph projection failed for updated entity (add fallback); lineage queries may be inconsistent"
+                    );
                 }
             }
         }
@@ -566,6 +598,14 @@ impl MetavisorStore for DefaultMetavisorStore {
             .await
         {
             self.record_projection_failure("create", "relationship", &guid, &err);
+            tracing::error!(
+                relationship_guid = %guid,
+                relationship_type = %resolved_relationship.type_name,
+                end1_guid = %end1_guid,
+                end2_guid = %end2_guid,
+                error = %err,
+                "Graph projection failed for created relationship; lineage queries may be inconsistent"
+            );
         }
 
         Ok(guid)
@@ -585,6 +625,11 @@ impl MetavisorStore for DefaultMetavisorStore {
         // Remove old edge, then add updated one
         if let Err(err) = self.graph_store.remove_relationship_edge(guid).await {
             self.record_projection_failure("update", "relationship", guid, &err);
+            tracing::error!(
+                relationship_guid = %guid,
+                error = %err,
+                "Graph projection failed to remove old edge for updated relationship; lineage queries may be inconsistent"
+            );
             return Ok(());
         }
 
@@ -613,6 +658,14 @@ impl MetavisorStore for DefaultMetavisorStore {
                     .await
                 {
                     self.record_projection_failure("update", "relationship", guid, &err);
+                    tracing::error!(
+                        relationship_guid = %guid,
+                        relationship_type = %relationship.type_name,
+                        end1_guid = %from,
+                        end2_guid = %to,
+                        error = %err,
+                        "Graph projection failed to add new edge for updated relationship; lineage queries may be inconsistent"
+                    );
                 }
             }
             _ => {
@@ -816,7 +869,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bulk_create_entities_projects_graph() {
+    async fn test_batch_create_entities_projects_graph() {
         let (store, type_store) = create_test_store().await;
         create_test_types(&type_store).await;
 
@@ -824,7 +877,7 @@ mod tests {
             .map(|i| Entity::new("Table").with_attribute("name", json!(format!("table_{}", i))))
             .collect();
 
-        let guids = store.bulk_create_entities(&entities).await.unwrap();
+        let guids = store.batch_create_entities(&entities).await.unwrap();
         assert_eq!(guids.len(), 3);
         assert_eq!(store.graph_stats().node_count, 3);
     }

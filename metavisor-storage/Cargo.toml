@@ -14,6 +14,7 @@ metavisor-core = { path = "../metavisor-core" }
 async-trait = "0.1"
 uuid = { version = "1.22", features = ["v4"] }
 tracing.workspace = true
+sha2 = "0.10"
 tokio-util = "0.7"
 
 # 图存储后端 - Grafeo

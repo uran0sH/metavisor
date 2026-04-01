@@ -24,8 +24,7 @@ pub struct EntityAppState {
 
 #[derive(Serialize)]
 pub struct EntityApiResponse {
-    #[serde(flatten)]
-    entity_flat: Entity,
+    #[serde(rename = "entity")]
     entity: Entity,
     #[serde(rename = "referredEntities", skip_serializing_if = "HashMap::is_empty")]
     referred_entities: HashMap<String, Entity>,
@@ -34,7 +33,6 @@ pub struct EntityApiResponse {
 impl EntityApiResponse {
     fn new(entity: Entity, referred_entities: HashMap<String, Entity>) -> Self {
         Self {
-            entity_flat: entity.clone(),
             entity,
             referred_entities,
         }
@@ -57,6 +55,34 @@ impl EntityPayload {
     }
 }
 
+/// Validate entity input at handler layer
+fn validate_entity_input(entity: &Entity) -> crate::error::Result<()> {
+    // 1. Validate type_name is not empty
+    if entity.type_name.trim().is_empty() {
+        return Err(crate::error::ApiError::BadRequest(
+            "Entity typeName cannot be empty".to_string(),
+        ));
+    }
+
+    // 2. Validate GUID format if provided
+    if let Some(ref guid) = entity.guid {
+        if guid.trim().is_empty() {
+            return Err(crate::error::ApiError::BadRequest(
+                "Entity GUID cannot be empty string".to_string(),
+            ));
+        }
+        // UUID format validation (basic check)
+        if guid.len() < 32 {
+            return Err(crate::error::ApiError::BadRequest(format!(
+                "Invalid GUID format: '{}'",
+                guid
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// Create a single entity
 ///
 /// POST /v2/entity
@@ -75,6 +101,10 @@ pub async fn create_entity(
     Json(payload): Json<EntityPayload>,
 ) -> Result<(StatusCode, Json<EntityApiResponse>)> {
     let entity = payload.into_entity();
+
+    // Handler-level input validation
+    validate_entity_input(&entity)?;
+
     let guid = state.store.create_entity(&entity).await?;
 
     // Return the created entity with the generated GUID
@@ -87,20 +117,28 @@ pub async fn create_entity(
     ))
 }
 
-/// Create multiple entities
+/// Create multiple entities atomically
 ///
 /// POST /v2/entity/bulk
+///
+/// Either all entities are created successfully, or none are (all-or-nothing).
 pub async fn create_entities(
     State(state): State<EntityAppState>,
     Json(entities): Json<Vec<Entity>>,
 ) -> Result<(StatusCode, Json<EntitiesWithExtInfo>)> {
-    let mut created = EntitiesWithExtInfo::new();
+    // Handler-level input validation for all entities
+    for entity in &entities {
+        validate_entity_input(entity)?;
+    }
 
-    for entity in entities {
-        let guid = state.store.create_entity(&entity).await?;
-        let mut entity_with_guid = entity;
-        entity_with_guid.guid = Some(guid);
-        created.add_entity(entity_with_guid);
+    // Use atomic batch creation (all-or-nothing)
+    let guids = state.store.batch_create_entities(&entities).await?;
+
+    // Build response with created entities
+    let mut created = EntitiesWithExtInfo::new();
+    for (mut entity, guid) in entities.into_iter().zip(guids) {
+        entity.guid = Some(guid);
+        created.add_entity(entity);
     }
 
     Ok((StatusCode::CREATED, Json(created)))

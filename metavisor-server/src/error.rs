@@ -39,9 +39,8 @@ impl IntoResponse for ApiError {
                 }
                 metavisor_core::CoreError::TypeAlreadyExists(_)
                 | metavisor_core::CoreError::EntityAlreadyExists(_)
-                | metavisor_core::CoreError::RelationshipAlreadyExists(_) => {
-                    (StatusCode::CONFLICT, e.to_string())
-                }
+                | metavisor_core::CoreError::RelationshipAlreadyExists(_)
+                | metavisor_core::CoreError::Conflict(_) => (StatusCode::CONFLICT, e.to_string()),
                 metavisor_core::CoreError::Validation(_)
                 | metavisor_core::CoreError::InvalidAttribute(_) => {
                     (StatusCode::BAD_REQUEST, e.to_string())

@@ -41,6 +41,9 @@ pub enum CoreError {
     #[error("Storage error: {0}")]
     Storage(String),
 
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

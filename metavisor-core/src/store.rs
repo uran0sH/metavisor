@@ -19,6 +19,9 @@ pub trait TypeStore: Send + Sync {
     /// Get a type definition by name
     async fn get_type(&self, name: &str) -> Result<TypeDef>;
 
+    /// Get a type definition by GUID (using index lookup)
+    async fn get_type_by_guid(&self, guid: &str) -> Result<TypeDef>;
+
     /// Update a type definition
     async fn update_type(&self, type_def: &TypeDef) -> Result<()>;
 
@@ -31,26 +34,23 @@ pub trait TypeStore: Send + Sync {
     /// List all type names
     async fn list_types(&self) -> Result<Vec<String>>;
 
+    /// List all type definitions (more efficient than list_types + get_type for each)
+    async fn list_type_defs(&self) -> Result<Vec<TypeDef>>;
+
     /// List types by category
     async fn list_types_by_category(&self, category: crate::TypeCategory) -> Result<Vec<String>>;
 
     /// Create multiple type definitions atomically.
-    /// Default implementation delegates to individual `create_type` calls.
-    async fn batch_create_types(&self, type_defs: &[TypeDef]) -> Result<()> {
-        for td in type_defs {
-            self.create_type(td).await?;
-        }
-        Ok(())
-    }
+    /// Implementations must ensure all-or-nothing semantics.
+    async fn batch_create_types(&self, type_defs: &[TypeDef]) -> Result<()>;
 
     /// Update multiple type definitions atomically.
-    /// Default implementation delegates to individual `update_type` calls.
-    async fn batch_update_types(&self, type_defs: &[TypeDef]) -> Result<()> {
-        for td in type_defs {
-            self.update_type(td).await?;
-        }
-        Ok(())
-    }
+    /// Implementations must ensure all-or-nothing semantics.
+    async fn batch_update_types(&self, type_defs: &[TypeDef]) -> Result<()>;
+
+    /// Delete multiple type definitions atomically.
+    /// Implementations must ensure all-or-nothing semantics.
+    async fn batch_delete_types(&self, names: &[String]) -> Result<()>;
 }
 
 // ============================================================================
@@ -87,6 +87,10 @@ pub trait EntityStore: Send + Sync {
 
     /// List all entity headers
     async fn list_entities(&self) -> Result<Vec<EntityHeader>>;
+
+    /// Create multiple entities atomically.
+    /// Implementations must ensure all-or-nothing semantics.
+    async fn batch_create_entities(&self, entities: &[Entity]) -> Result<Vec<String>>;
 }
 
 // ============================================================================
@@ -147,8 +151,12 @@ const RELATIONSHIP_ENDPOINT_INDEX_PREFIX: &[u8] = b"rel_endpoint:";
 const RELATIONSHIP_TYPE_INDEX_PREFIX: &[u8] = b"rel_type:";
 
 /// Entity unique attribute index prefix
-/// Format: entity_unique:{type_name}:{attr_name}:{attr_value} -> entity_guid
+/// Format: entity_unique\0{type_name}\0{attr_name}\0{attr_value} -> entity_guid
 const ENTITY_UNIQUE_INDEX_PREFIX: &[u8] = b"entity_unique:";
+
+/// Type GUID index prefix (for looking up type by GUID)
+/// Format: type_guid:{guid} -> type_name
+const TYPE_GUID_INDEX_PREFIX: &[u8] = b"type_guid:";
 
 /// Build the key for storing a type definition
 pub fn type_key(name: &str) -> Vec<u8> {
@@ -156,6 +164,15 @@ pub fn type_key(name: &str) -> Vec<u8> {
     let mut key = Vec::with_capacity(cap);
     key.extend_from_slice(TYPE_PREFIX);
     key.extend_from_slice(name.as_bytes());
+    key
+}
+
+/// Build the key for type GUID index (for looking up type by GUID)
+pub fn type_guid_index_key(guid: &str) -> Vec<u8> {
+    let cap = TYPE_GUID_INDEX_PREFIX.len() + guid.len();
+    let mut key = Vec::with_capacity(cap);
+    key.extend_from_slice(TYPE_GUID_INDEX_PREFIX);
+    key.extend_from_slice(guid.as_bytes());
     key
 }
 
@@ -214,9 +231,11 @@ pub fn relationship_type_index_key(type_name: &str, guid: &str) -> Vec<u8> {
 }
 
 /// Build the key for entity unique attribute index
-/// Format: entity_unique:{type_name}:{attr_name}:{attr_value}
+/// Format: entity_unique\0{type_name}\0{attr_name}\0{attr_value}
+/// Uses null byte (\0) as separator to avoid ambiguity with values containing ':'
 pub fn entity_unique_index_key(type_name: &str, attr_name: &str, attr_value: &str) -> Vec<u8> {
     let cap = ENTITY_UNIQUE_INDEX_PREFIX.len()
+        + 1
         + type_name.len()
         + 1
         + attr_name.len()
@@ -224,10 +243,11 @@ pub fn entity_unique_index_key(type_name: &str, attr_name: &str, attr_value: &st
         + attr_value.len();
     let mut key = Vec::with_capacity(cap);
     key.extend_from_slice(ENTITY_UNIQUE_INDEX_PREFIX);
+    key.push(b'\0');
     key.extend_from_slice(type_name.as_bytes());
-    key.push(b':');
+    key.push(b'\0');
     key.extend_from_slice(attr_name.as_bytes());
-    key.push(b':');
+    key.push(b'\0');
     key.extend_from_slice(attr_value.as_bytes());
     key
 }
@@ -255,6 +275,9 @@ pub trait MetavisorStore: Send + Sync {
     /// Get a type definition by name
     async fn get_type(&self, name: &str) -> Result<TypeDef>;
 
+    /// Get a type definition by GUID (using index lookup)
+    async fn get_type_by_guid(&self, guid: &str) -> Result<TypeDef>;
+
     /// Update a type definition
     async fn update_type(&self, type_def: &TypeDef) -> Result<()>;
 
@@ -267,11 +290,17 @@ pub trait MetavisorStore: Send + Sync {
     /// List all type names
     async fn list_types(&self) -> Result<Vec<String>>;
 
+    /// List all type definitions (more efficient than list_types + get_type for each)
+    async fn list_type_defs(&self) -> Result<Vec<TypeDef>>;
+
     /// Create multiple type definitions atomically
     async fn batch_create_types(&self, type_defs: &[TypeDef]) -> Result<()>;
 
     /// Update multiple type definitions atomically
     async fn batch_update_types(&self, type_defs: &[TypeDef]) -> Result<()>;
+
+    /// Delete multiple type definitions atomically
+    async fn batch_delete_types(&self, names: &[String]) -> Result<()>;
 
     // ========================================================================
     // Entity Operations (with Graph sync)
@@ -304,6 +333,9 @@ pub trait MetavisorStore: Send + Sync {
 
     /// List all entity headers
     async fn list_entities(&self) -> Result<Vec<EntityHeader>>;
+
+    /// Create multiple entities atomically (with Graph sync)
+    async fn batch_create_entities(&self, entities: &[Entity]) -> Result<Vec<String>>;
 
     // ========================================================================
     // Relationship Operations (with Graph sync)

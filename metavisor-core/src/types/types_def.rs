@@ -182,6 +182,18 @@ impl TypesDef {
     pub fn has_business_metadata_def(&self, name: &str) -> bool {
         self.business_metadata_defs.iter().any(|d| d.name == name)
     }
+
+    /// Push a TypeDef into the appropriate Vec based on its variant
+    pub fn push(&mut self, type_def: TypeDef) {
+        match type_def {
+            TypeDef::Entity(def) => self.entity_defs.push(def),
+            TypeDef::Classification(def) => self.classification_defs.push(def),
+            TypeDef::Struct(def) => self.struct_defs.push(def),
+            TypeDef::Enum(def) => self.enum_defs.push(def),
+            TypeDef::Relationship(def) => self.relationship_defs.push(def),
+            TypeDef::BusinessMetadata(def) => self.business_metadata_defs.push(def),
+        }
+    }
 }
 
 /// Type header for list operations

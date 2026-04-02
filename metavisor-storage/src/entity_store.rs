@@ -6,6 +6,8 @@ use metavisor_core::{
     EntityStore, Result, TypeDef, TypeStore,
 };
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -102,9 +104,11 @@ impl KvEntityStore {
         }
 
         // 5. Validate attribute types
+        let mut seen_types = std::collections::HashSet::new();
         for (name, value) in &entity.attributes {
             if let Some(attr_def) = attr_defs.iter().find(|a| &a.name == name) {
-                self.validate_attribute_type(&attr_def.type_name, value, name)?;
+                self.validate_attribute_type(&attr_def.type_name, value, name, &mut seen_types)
+                    .await?;
             }
         }
 
@@ -255,130 +259,326 @@ impl KvEntityStore {
     }
 
     /// Validate attribute value against its declared type
-    fn validate_attribute_type(
-        &self,
-        type_name: &str,
-        value: &serde_json::Value,
-        attr_name: &str,
-    ) -> Result<()> {
-        // Handle primitive types
-        let is_valid = match type_name {
-            "string" => value.is_string(),
-            "int" | "long" | "integer" => value.is_i64() || value.is_u64(),
-            "short" => value.is_i64() || value.is_u64(),
-            "byte" => value.is_i64() || value.is_u64(),
-            "float" | "double" => value.is_number(),
-            "boolean" => value.is_boolean(),
-            "date" | "datetime" => value.is_string(), // String representation
-            "array<string>" => self.validate_array_element_type(value, "string", attr_name)?,
-            "array<int>" | "array<long>" => {
-                self.validate_array_element_type(value, "int", attr_name)?
-            }
-            "map<string,string>" => {
-                self.validate_map_element_types(value, "string", "string", attr_name)?
-            }
-            "map<string,object>" => {
-                self.validate_map_element_types(value, "string", "object", attr_name)?
-            }
-            // For other types (references, custom types), reject unknown type names
-            _ => {
+    fn validate_attribute_type<'a>(
+        &'a self,
+        type_name: &'a str,
+        value: &'a serde_json::Value,
+        attr_name: &'a str,
+        seen_types: &'a mut std::collections::HashSet<String>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let is_valid = match type_name {
+                "string" => value.is_string(),
+                "int" | "long" | "integer" => value.is_i64() || value.is_u64(),
+                "short" => value.is_i64() || value.is_u64(),
+                "byte" => value.is_i64() || value.is_u64(),
+                "float" | "double" => value.is_number(),
+                "boolean" => value.is_boolean(),
+                "date" | "datetime" => value.is_string(),
+                _ => {
+                    // Generic collection types: array<T>, map<K,V>
+                    if let Some(element_type) = type_name
+                        .strip_prefix("array<")
+                        .and_then(|s| s.strip_suffix(">"))
+                    {
+                        self.validate_array_element_type(value, element_type, attr_name, seen_types)
+                            .await?
+                    } else if let Some(inner) = type_name
+                        .strip_prefix("map<")
+                        .and_then(|s| s.strip_suffix(">"))
+                    {
+                        let parts: Vec<&str> = inner.splitn(2, ',').collect();
+                        if parts.len() == 2 {
+                            self.validate_map_element_types(
+                                value,
+                                parts[0].trim(),
+                                parts[1].trim(),
+                                attr_name,
+                                seen_types,
+                            )
+                            .await?
+                        } else {
+                            false
+                        }
+                    } else {
+                        self.validate_custom_type(type_name, value, attr_name, seen_types)
+                            .await?
+                    }
+                }
+            };
+
+            if !is_valid {
                 return Err(CoreError::Validation(format!(
-                    "Unknown attribute type '{}' for attribute '{}'",
-                    type_name, attr_name
+                    "Attribute '{}' has invalid type. Expected '{}', got value: {}",
+                    attr_name,
+                    type_name,
+                    if value.is_string() {
+                        format!("\"{}\"", value.as_str().unwrap_or(""))
+                    } else {
+                        value.to_string()
+                    }
                 )));
             }
-        };
 
-        if !is_valid {
-            return Err(CoreError::Validation(format!(
-                "Attribute '{}' has invalid type. Expected '{}', got value: {}",
-                attr_name,
-                type_name,
-                if value.is_string() {
-                    format!("\"{}\"", value.as_str().unwrap_or(""))
-                } else {
-                    value.to_string()
+            Ok(())
+        })
+    }
+
+    /// Validate custom type values (Struct, Enum, Entity, Classification, Relationship, BusinessMetadata)
+    fn validate_custom_type<'a>(
+        &'a self,
+        type_name: &'a str,
+        value: &'a serde_json::Value,
+        attr_name: &'a str,
+        seen_types: &'a mut std::collections::HashSet<String>,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+        Box::pin(async move {
+            // Cycle detection: if we've already seen this type in the current validation chain,
+            // perform only shallow validation to avoid infinite recursion.
+            if !seen_types.insert(type_name.to_string()) {
+                return match self.type_store.get_type(type_name).await {
+                    Ok(TypeDef::Struct(_))
+                    | Ok(TypeDef::Classification(_))
+                    | Ok(TypeDef::BusinessMetadata(_)) => Ok(value.is_object()),
+                    Ok(TypeDef::Enum(_)) => Ok(value.is_string()),
+                    Ok(TypeDef::Entity(_)) | Ok(TypeDef::Relationship(_)) => Ok(value.is_string()
+                        || value.as_object().is_some_and(|o| o.contains_key("guid"))),
+                    _ => Ok(true),
+                };
+            }
+
+            let result = match self.type_store.get_type(type_name).await {
+                Ok(TypeDef::Struct(struct_def)) => {
+                    if !value.is_object() {
+                        return Ok(false);
+                    }
+                    let obj = value.as_object().unwrap();
+
+                    // Support both AtlasStruct format and plain attribute map
+                    let attrs = if obj.contains_key("typeName") && obj.contains_key("attributes") {
+                        obj.get("attributes")
+                            .and_then(|a| a.as_object())
+                            .ok_or_else(|| {
+                                CoreError::Validation(format!(
+                                    "Attribute '{}' has invalid AtlasStruct format for type '{}'",
+                                    attr_name, type_name
+                                ))
+                            })?
+                    } else {
+                        obj
+                    };
+
+                    // Validate required attributes
+                    for attr_def in &struct_def.attribute_defs {
+                        if !attr_def.is_optional && !attrs.contains_key(&attr_def.name) {
+                            return Err(CoreError::Validation(format!(
+                                "Required attribute '{}' is missing for struct type '{}' in attribute '{}'",
+                                attr_def.name, type_name, attr_name
+                            )));
+                        }
+                    }
+
+                    // Validate all provided attributes
+                    for (k, v) in attrs.iter() {
+                        if let Some(attr_def) =
+                            struct_def.attribute_defs.iter().find(|a| a.name == *k)
+                        {
+                            self.validate_attribute_type(
+                                &attr_def.type_name,
+                                v,
+                                &format!("{}.{}", attr_name, k),
+                                seen_types,
+                            )
+                            .await?;
+                        } else {
+                            return Err(CoreError::Validation(format!(
+                                "Attribute '{}' is not defined for struct type '{}' in attribute '{}'",
+                                k, type_name, attr_name
+                            )));
+                        }
+                    }
+                    Ok(true)
                 }
-            )));
-        }
+                Ok(TypeDef::Enum(enum_def)) => {
+                    if let Some(s) = value.as_str() {
+                        let valid = enum_def.element_defs.iter().any(|e| e.value == s);
+                        if !valid {
+                            let valid_values: Vec<String> = enum_def
+                                .element_defs
+                                .iter()
+                                .map(|e| e.value.clone())
+                                .collect();
+                            return Err(CoreError::Validation(format!(
+                                "Invalid enum value '{}' for type '{}' in attribute '{}'. Valid values: {:?}",
+                                s, type_name, attr_name, valid_values
+                            )));
+                        }
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                }
+                Ok(TypeDef::Entity(_)) => {
+                    Ok(value.is_string()
+                        || value.as_object().is_some_and(|o| o.contains_key("guid")))
+                }
+                Ok(TypeDef::Classification(class_def)) => {
+                    if !value.is_object() {
+                        return Ok(false);
+                    }
+                    let obj = value.as_object().unwrap();
 
-        Ok(())
+                    // Classification should have matching typeName if present
+                    if let Some(tn) = obj.get("typeName").and_then(|v| v.as_str()) {
+                        if tn != class_def.name {
+                            return Ok(false);
+                        }
+                    }
+
+                    // Validate attributes if present
+                    let attrs = if let Some(attrs_val) = obj.get("attributes") {
+                        attrs_val.as_object().ok_or_else(|| {
+                            CoreError::Validation(format!(
+                                "Attribute '{}' has invalid classification attributes for type '{}'",
+                                attr_name, type_name
+                            ))
+                        })?
+                    } else {
+                        obj
+                    };
+
+                    for attr_def in &class_def.attribute_defs {
+                        if !attr_def.is_optional && !attrs.contains_key(&attr_def.name) {
+                            return Err(CoreError::Validation(format!(
+                                "Required attribute '{}' is missing for classification type '{}' in attribute '{}'",
+                                attr_def.name, type_name, attr_name
+                            )));
+                        }
+                    }
+
+                    for (k, v) in attrs.iter() {
+                        if let Some(attr_def) =
+                            class_def.attribute_defs.iter().find(|a| a.name == *k)
+                        {
+                            self.validate_attribute_type(
+                                &attr_def.type_name,
+                                v,
+                                &format!("{}.{}", attr_name, k),
+                                seen_types,
+                            )
+                            .await?;
+                        } else if k != "typeName" {
+                            return Err(CoreError::Validation(format!(
+                                "Attribute '{}' is not defined for classification type '{}' in attribute '{}'",
+                                k, type_name, attr_name
+                            )));
+                        }
+                    }
+                    Ok(true)
+                }
+                Ok(TypeDef::Relationship(_)) => {
+                    Ok(value.is_string()
+                        || value.as_object().is_some_and(|o| o.contains_key("guid")))
+                }
+                Ok(TypeDef::BusinessMetadata(_)) => Ok(value.is_object()),
+                Err(CoreError::TypeNotFound(_)) => Err(CoreError::Validation(format!(
+                    "Unknown attribute type '{}' for attribute '{}'",
+                    type_name, attr_name
+                ))),
+                Err(e) => Err(e),
+            };
+
+            seen_types.remove(type_name);
+            result
+        })
     }
 
     /// Validate array elements match the expected element type
-    fn validate_array_element_type(
-        &self,
-        value: &serde_json::Value,
-        element_type: &str,
-        attr_name: &str,
-    ) -> Result<bool> {
-        if !value.is_array() {
-            return Ok(false);
-        }
-
-        let arr = value.as_array().unwrap();
-        for (i, elem) in arr.iter().enumerate() {
-            let elem_valid = match element_type {
-                "string" => elem.is_string(),
-                "int" | "long" => elem.is_i64() || elem.is_u64(),
-                _ => true, // Unknown element types pass through
-            };
-
-            if !elem_valid {
-                return Err(CoreError::Validation(format!(
-                    "Attribute '{}' array element at index {} has invalid type. Expected '{}', got: {}",
-                    attr_name,
-                    i,
-                    element_type,
-                    elem
-                )));
+    fn validate_array_element_type<'a>(
+        &'a self,
+        value: &'a serde_json::Value,
+        element_type: &'a str,
+        attr_name: &'a str,
+        seen_types: &'a mut std::collections::HashSet<String>,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+        Box::pin(async move {
+            if !value.is_array() {
+                return Ok(false);
             }
-        }
 
-        Ok(true)
+            let arr = value.as_array().unwrap();
+            for (i, elem) in arr.iter().enumerate() {
+                match self
+                    .validate_attribute_type(
+                        element_type,
+                        elem,
+                        &format!("{}[{}]", attr_name, i),
+                        seen_types,
+                    )
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(CoreError::Validation(msg)) => {
+                        return Err(CoreError::Validation(format!(
+                            "Attribute '{}' array element at index {} has invalid type. Expected '{}', got: {}. {}",
+                            attr_name, i, element_type, elem, msg
+                        )));
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+
+            Ok(true)
+        })
     }
 
     /// Validate map key and value types
-    fn validate_map_element_types(
-        &self,
-        value: &serde_json::Value,
-        key_type: &str,
-        value_type: &str,
-        attr_name: &str,
-    ) -> Result<bool> {
-        if !value.is_object() {
-            return Ok(false);
-        }
-
-        let obj = value.as_object().unwrap();
-        for (k, v) in obj.iter() {
-            // Validate key type (only string keys are supported for JSON maps)
-            if key_type == "string" && k.is_empty() {
-                return Err(CoreError::Validation(format!(
-                    "Attribute '{}' map contains empty key",
-                    attr_name
-                )));
+    fn validate_map_element_types<'a>(
+        &'a self,
+        value: &'a serde_json::Value,
+        key_type: &'a str,
+        value_type: &'a str,
+        attr_name: &'a str,
+        seen_types: &'a mut std::collections::HashSet<String>,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+        Box::pin(async move {
+            if !value.is_object() {
+                return Ok(false);
             }
 
-            // Validate value type
-            let value_valid = match value_type {
-                "string" => v.is_string(),
-                "object" => v.is_object() || v.is_string(), // object can be stringified JSON
-                _ => true,
-            };
+            let obj = value.as_object().unwrap();
+            for (k, v) in obj.iter() {
+                // Validate key type (only string keys are supported for JSON maps)
+                if key_type == "string" && k.is_empty() {
+                    return Err(CoreError::Validation(format!(
+                        "Attribute '{}' map contains empty key",
+                        attr_name
+                    )));
+                }
 
-            if !value_valid {
-                return Err(CoreError::Validation(format!(
-                    "Attribute '{}' map value for key '{}' has invalid type. Expected '{}', got: {}",
-                    attr_name,
-                    k,
-                    value_type,
-                    v
-                )));
+                // Validate value type recursively
+                match self
+                    .validate_attribute_type(
+                        value_type,
+                        v,
+                        &format!("{}[{}]", attr_name, k),
+                        seen_types,
+                    )
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(CoreError::Validation(msg)) => {
+                        return Err(CoreError::Validation(format!(
+                            "Attribute '{}' map value for key '{}' has invalid type. Expected '{}', got: {}. {}",
+                            attr_name, k, value_type, v, msg
+                        )));
+                    }
+                    Err(e) => return Err(e),
+                }
             }
-        }
 
-        Ok(true)
+            Ok(true)
+        })
     }
 }
 
@@ -814,7 +1014,9 @@ impl EntityStore for KvEntityStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use metavisor_core::{AttributeDef, Classification, EntityDef};
+    use metavisor_core::{
+        AttributeDef, Classification, EntityDef, EnumDef, EnumElementDef, StructDef,
+    };
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -1294,5 +1496,341 @@ mod tests {
             10,
             "Expected remaining 9 to be constraint violations"
         );
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_with_struct_attribute() {
+        let (store, type_store) = create_test_stores().await;
+
+        // Create Address struct type
+        let address_struct = StructDef::new("Address")
+            .attribute(AttributeDef::new("street", "string").required())
+            .attribute(AttributeDef::new("city", "string").required())
+            .attribute(AttributeDef::new("zip", "string"));
+        type_store
+            .create_type(&TypeDef::from(address_struct))
+            .await
+            .unwrap();
+
+        // Create Person entity type with Address attribute
+        let person_def = EntityDef::new("Person")
+            .attribute(AttributeDef::new("name", "string").required())
+            .attribute(AttributeDef::new("address", "Address"));
+        type_store
+            .create_type(&TypeDef::from(person_def))
+            .await
+            .unwrap();
+
+        // Create entity with struct attribute (plain attribute map)
+        let entity = Entity::new("Person")
+            .with_attribute("name", json!("Alice"))
+            .with_attribute(
+                "address",
+                json!({
+                    "street": "123 Main St",
+                    "city": "NYC"
+                }),
+            );
+
+        let guid = store.create_entity(&entity).await.unwrap();
+        let retrieved = store.get_entity(&guid).await.unwrap();
+        assert_eq!(retrieved.attributes.get("name"), Some(&json!("Alice")));
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_with_struct_attribute_missing_required() {
+        let (store, type_store) = create_test_stores().await;
+
+        let address_struct = StructDef::new("Address")
+            .attribute(AttributeDef::new("street", "string").required())
+            .attribute(AttributeDef::new("city", "string"));
+        type_store
+            .create_type(&TypeDef::from(address_struct))
+            .await
+            .unwrap();
+
+        let person_def = EntityDef::new("Person")
+            .attribute(AttributeDef::new("name", "string"))
+            .attribute(AttributeDef::new("address", "Address"));
+        type_store
+            .create_type(&TypeDef::from(person_def))
+            .await
+            .unwrap();
+
+        // Missing required "street" in struct
+        let entity = Entity::new("Person").with_attribute(
+            "address",
+            json!({
+                "city": "NYC"
+            }),
+        );
+
+        let result = store.create_entity(&entity).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Required attribute 'street' is missing"));
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_with_struct_atlas_format() {
+        let (store, type_store) = create_test_stores().await;
+
+        let address_struct = StructDef::new("Address")
+            .attribute(AttributeDef::new("street", "string").required())
+            .attribute(AttributeDef::new("city", "string").required());
+        type_store
+            .create_type(&TypeDef::from(address_struct))
+            .await
+            .unwrap();
+
+        let person_def =
+            EntityDef::new("Person").attribute(AttributeDef::new("address", "Address"));
+        type_store
+            .create_type(&TypeDef::from(person_def))
+            .await
+            .unwrap();
+
+        // AtlasStruct format: {"typeName": "Address", "attributes": {...}}
+        let entity = Entity::new("Person").with_attribute(
+            "address",
+            json!({
+                "typeName": "Address",
+                "attributes": {
+                    "street": "456 Oak Ave",
+                    "city": "LA"
+                }
+            }),
+        );
+
+        let guid = store.create_entity(&entity).await.unwrap();
+        let retrieved = store.get_entity(&guid).await.unwrap();
+        assert!(retrieved.attributes.contains_key("address"));
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_with_enum_attribute() {
+        let (store, type_store) = create_test_stores().await;
+
+        // Create Status enum type
+        let status_enum = EnumDef::new("Status")
+            .element(EnumElementDef::new("ACTIVE"))
+            .element(EnumElementDef::new("INACTIVE"))
+            .element(EnumElementDef::new("PENDING"));
+        type_store
+            .create_type(&TypeDef::from(status_enum))
+            .await
+            .unwrap();
+
+        let task_def = EntityDef::new("Task")
+            .attribute(AttributeDef::new("name", "string").required())
+            .attribute(AttributeDef::new("status", "Status"));
+        type_store
+            .create_type(&TypeDef::from(task_def))
+            .await
+            .unwrap();
+
+        let entity = Entity::new("Task")
+            .with_attribute("name", json!("cleanup"))
+            .with_attribute("status", json!("ACTIVE"));
+
+        let guid = store.create_entity(&entity).await.unwrap();
+        let retrieved = store.get_entity(&guid).await.unwrap();
+        assert_eq!(retrieved.attributes.get("status"), Some(&json!("ACTIVE")));
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_with_invalid_enum_value() {
+        let (store, type_store) = create_test_stores().await;
+
+        let status_enum = EnumDef::new("Status")
+            .element(EnumElementDef::new("ACTIVE"))
+            .element(EnumElementDef::new("INACTIVE"));
+        type_store
+            .create_type(&TypeDef::from(status_enum))
+            .await
+            .unwrap();
+
+        let task_def = EntityDef::new("Task")
+            .attribute(AttributeDef::new("name", "string"))
+            .attribute(AttributeDef::new("status", "Status"));
+        type_store
+            .create_type(&TypeDef::from(task_def))
+            .await
+            .unwrap();
+
+        let entity = Entity::new("Task")
+            .with_attribute("name", json!("cleanup"))
+            .with_attribute("status", json!("UNKNOWN"));
+
+        let result = store.create_entity(&entity).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid enum value 'UNKNOWN'"));
+        assert!(err.contains("ACTIVE") && err.contains("INACTIVE"));
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_with_array_of_struct() {
+        let (store, type_store) = create_test_stores().await;
+
+        let tag_struct = StructDef::new("Tag")
+            .attribute(AttributeDef::new("name", "string").required())
+            .attribute(AttributeDef::new("color", "string"));
+        type_store
+            .create_type(&TypeDef::from(tag_struct))
+            .await
+            .unwrap();
+
+        let asset_def = EntityDef::new("Asset")
+            .attribute(AttributeDef::new("name", "string"))
+            .attribute(AttributeDef::new("tags", "array<Tag>"));
+        type_store
+            .create_type(&TypeDef::from(asset_def))
+            .await
+            .unwrap();
+
+        let entity = Entity::new("Asset")
+            .with_attribute("name", json!("image.png"))
+            .with_attribute(
+                "tags",
+                json!([
+                    {"name": "important", "color": "red"},
+                    {"name": "archive"}
+                ]),
+            );
+
+        let guid = store.create_entity(&entity).await.unwrap();
+        let retrieved = store.get_entity(&guid).await.unwrap();
+        assert_eq!(retrieved.attributes.get("name"), Some(&json!("image.png")));
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_with_map_of_enum() {
+        let (store, type_store) = create_test_stores().await;
+
+        let priority_enum = EnumDef::new("Priority")
+            .element(EnumElementDef::new("LOW"))
+            .element(EnumElementDef::new("MEDIUM"))
+            .element(EnumElementDef::new("HIGH"));
+        type_store
+            .create_type(&TypeDef::from(priority_enum))
+            .await
+            .unwrap();
+
+        let project_def = EntityDef::new("Project")
+            .attribute(AttributeDef::new("name", "string"))
+            .attribute(AttributeDef::new(
+                "module_priorities",
+                "map<string,Priority>",
+            ));
+        type_store
+            .create_type(&TypeDef::from(project_def))
+            .await
+            .unwrap();
+
+        let entity = Entity::new("Project")
+            .with_attribute("name", json!("metavisor"))
+            .with_attribute(
+                "module_priorities",
+                json!({
+                    "core": "HIGH",
+                    "ui": "MEDIUM"
+                }),
+            );
+
+        let guid = store.create_entity(&entity).await.unwrap();
+        let retrieved = store.get_entity(&guid).await.unwrap();
+        assert!(retrieved.attributes.contains_key("module_priorities"));
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_with_entity_reference() {
+        let (store, type_store) = create_test_stores().await;
+
+        // Create referenced type
+        let db_def = EntityDef::new("Database").attribute(AttributeDef::new("name", "string"));
+        type_store
+            .create_type(&TypeDef::from(db_def))
+            .await
+            .unwrap();
+
+        // Create referencing type
+        let table_def = EntityDef::new("DBTable")
+            .attribute(AttributeDef::new("name", "string"))
+            .attribute(AttributeDef::new("database", "Database"));
+        type_store
+            .create_type(&TypeDef::from(table_def))
+            .await
+            .unwrap();
+
+        // Reference by GUID string
+        let entity = Entity::new("DBTable")
+            .with_attribute("name", json!("users"))
+            .with_attribute("database", json!("db-guid-123"));
+
+        let guid = store.create_entity(&entity).await.unwrap();
+        let retrieved = store.get_entity(&guid).await.unwrap();
+        assert_eq!(
+            retrieved.attributes.get("database"),
+            Some(&json!("db-guid-123"))
+        );
+
+        // Reference by ObjectId (Atlas format)
+        let entity2 = Entity::new("DBTable")
+            .with_attribute("name", json!("orders"))
+            .with_attribute(
+                "database",
+                json!({"typeName": "Database", "guid": "db-guid-456"}),
+            );
+
+        let guid2 = store.create_entity(&entity2).await.unwrap();
+        let retrieved2 = store.get_entity(&guid2).await.unwrap();
+        assert!(retrieved2.attributes.contains_key("database"));
+    }
+
+    #[tokio::test]
+    async fn test_nested_struct_validation() {
+        let (store, type_store) = create_test_stores().await;
+
+        let geo_struct = StructDef::new("GeoPoint")
+            .attribute(AttributeDef::new("lat", "float").required())
+            .attribute(AttributeDef::new("lon", "float").required());
+        type_store
+            .create_type(&TypeDef::from(geo_struct))
+            .await
+            .unwrap();
+
+        let location_struct = StructDef::new("Location")
+            .attribute(AttributeDef::new("name", "string"))
+            .attribute(AttributeDef::new("coordinates", "GeoPoint"));
+        type_store
+            .create_type(&TypeDef::from(location_struct))
+            .await
+            .unwrap();
+
+        let event_def = EntityDef::new("Event")
+            .attribute(AttributeDef::new("title", "string"))
+            .attribute(AttributeDef::new("location", "Location"));
+        type_store
+            .create_type(&TypeDef::from(event_def))
+            .await
+            .unwrap();
+
+        let entity = Entity::new("Event")
+            .with_attribute("title", json!("RustConf"))
+            .with_attribute(
+                "location",
+                json!({
+                    "name": "Convention Center",
+                    "coordinates": {
+                        "lat": 37.7749,
+                        "lon": -122.4194
+                    }
+                }),
+            );
+
+        let guid = store.create_entity(&entity).await.unwrap();
+        let retrieved = store.get_entity(&guid).await.unwrap();
+        assert!(retrieved.attributes.contains_key("location"));
     }
 }
